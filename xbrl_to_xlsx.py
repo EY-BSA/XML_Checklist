@@ -341,7 +341,7 @@ def pick_decimal(name: str, facts: dict[str, list[dict[str, str]]]) -> str:
 
 
 # ───────────────────────────────────────────────────────────────────────────
-# 5) ZIP 안에서 XBRL 파일 자동 탐지
+# 5) ZIP 안에서 XBRL 파일 자동 탐지 (pre를 기반으로)
 # ───────────────────────────────────────────────────────────────────────────
 def _resolve_xbrl_files(directory: str) -> dict[str, str]:
     result = {"xsd": "", "pre": "", "lab_ko": "", "lab_en": "", "xbrl": ""}
