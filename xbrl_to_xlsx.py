@@ -325,15 +325,19 @@ def parse_instance_facts(xbrl_path: str) -> dict[str, list[dict[str, str]]]:
 
 def pick_decimal(name: str, facts: dict[str, list[dict[str, str]]]) -> str:
     """
-    concept(local name) 의 fact 중 '당기' 컨텍스트(C로 시작) 를 우선 선택.
-    없으면 첫 fact 의 decimals 사용.
+    당기(C로 시작) 컨텍스트 우선, 그 중 가장 작은(most rounded) decimals 반환.
     """
     fact_list = facts.get(name)
     if not fact_list:
         return ""
-    current = [f for f in fact_list if f["contextRef"].startswith("C")]
-    chosen = current[0] if current else fact_list[0]
-    return chosen.get("decimals", "")
+    candidates = [f for f in fact_list if f["contextRef"].startswith("C")] or fact_list
+    numeric = []
+    for f in candidates:
+        try:
+            numeric.append(int(f["decimals"]))
+        except (ValueError, KeyError, TypeError):
+            pass
+    return str(min(numeric)) if numeric else ""
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -413,7 +417,7 @@ def _write_presentation(
         info = concepts_by_id.get(cid, {})
         ctype = info.get("type", "") or ""
         data_type = ctype.split(":", 1)[-1] if ":" in ctype else ctype
-        period = info.get("periodType") or ""
+        period = (info.get("periodType") or "").upper() or ""
 
         _, local_name = _split_concept_id(cid)
         decimal = pick_decimal(local_name, facts)
