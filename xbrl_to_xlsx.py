@@ -21,6 +21,7 @@ XBRL 원문 ZIP (.xsd + _pre.xml + _lab-ko.xml + _lab-en.xml + .xbrl)
 """
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import tempfile
@@ -32,6 +33,19 @@ from xml.etree import ElementTree as ET
 
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
+
+_TAXONOMY_JSON = Path(__file__).parent / "dart_taxonomy.json"
+_taxonomy_cache: dict[str, dict[str, str]] | None = None
+
+
+def _load_dart_taxonomy() -> dict[str, dict[str, str]]:
+    global _taxonomy_cache
+    if _taxonomy_cache is None:
+        if _TAXONOMY_JSON.exists():
+            _taxonomy_cache = json.loads(_TAXONOMY_JSON.read_text(encoding="utf-8"))
+        else:
+            _taxonomy_cache = {}
+    return _taxonomy_cache
 
 # ───────────────────────────────────────────────────────────────────────────
 # 네임스페이스
@@ -491,6 +505,21 @@ def convert_zip_to_xlsx(zip_path: str, out_path: str) -> str:
         files = _resolve_xbrl_files(tmp_dir)
 
         concept_rows, concepts_by_id, role_def = parse_xsd(files["xsd"])
+
+        # dart_taxonomy.json 으로 ifrs-full / dart concept 보완
+        for cid, info in _load_dart_taxonomy().items():
+            if cid not in concepts_by_id:
+                concepts_by_id[cid] = {
+                    "id":                cid,
+                    "name":              cid.split("_", 1)[-1] if "_" in cid else cid,
+                    "type":              info.get("type", ""),
+                    "periodType":        info.get("periodType", ""),
+                    "balance":           info.get("balance") or None,
+                    "abstract":          "false",
+                    "nillable":          "false",
+                    "substitutionGroup": "",
+                }
+
         labels_ko = parse_labels(files["lab_ko"])
         labels_en = parse_labels(files["lab_en"])
         presentation_rows = parse_presentation(

@@ -21,7 +21,7 @@ a = Analysis(
     ["main.py"],
     pathex=[os.path.abspath(".")],
     binaries=dnd_bins,
-    datas=dnd_datas,
+    datas=dnd_datas + [("dart_taxonomy.json", ".")],
     hiddenimports=["tkinterdnd2", "openpyxl"],
     hookspath=[],
     runtime_hooks=[],
