@@ -484,10 +484,13 @@ def _extract_company_name(xbrl_path: str) -> str:
 # ── 파일 자동 탐지 ────────────────────────────────────────────────────────────
 
 def _find(directory: str, suffix: str) -> str:
-    for p in Path(directory).iterdir():
-        if p.name.endswith(suffix):
-            return str(p)
-    raise FileNotFoundError(f"'{suffix}' 로 끝나는 파일을 {directory} 에서 찾지 못했습니다.")
+    """suffix로 끝나는 파일을 directory 아래에서 재귀 탐색 (EntityTaxonomy 등 하위 폴더 지원)."""
+    matches = [p for p in Path(directory).rglob(f"*{suffix}") if p.is_file()]
+    if not matches:
+        raise FileNotFoundError(f"'{suffix}' 로 끝나는 파일을 {directory} 에서 찾지 못했습니다.")
+    # 여러 개일 경우 경로 깊이가 얕은 것(루트에 가까운 것) 우선
+    matches.sort(key=lambda p: len(p.parts))
+    return str(matches[0])
 
 
 # ── 메인 파서 (taxonomy_xlsx_parser.parse_taxonomy_xlsx 와 동일한 인터페이스) ──
