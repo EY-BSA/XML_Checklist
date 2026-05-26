@@ -1,13 +1,13 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
 PyInstaller spec — Mac / Windows 공용
-  Windows → dist/XBRL_ZIP_to_XLSX.exe
-  macOS   → dist/XBRL_ZIP_to_XLSX.app
+  Windows → dist/XBRL_CoE_Checklist.exe
+  macOS   → dist/XBRL_CoE_Checklist.app
 빌드: python build.py  (또는 pyinstaller --clean build.spec)
 """
 import sys
 import os
-from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_all
 
 block_cipher = None
 
@@ -17,12 +17,27 @@ try:
 except Exception:
     dnd_datas, dnd_bins = [], []
 
+# pandas 전체 수집 (내부 모듈 누락 방지)
+pandas_datas, pandas_binaries, pandas_hiddenimports = collect_all("pandas")
+
 a = Analysis(
     ["main.py"],
     pathex=[os.path.abspath(".")],
-    binaries=dnd_bins,
-    datas=dnd_datas + [("dart_taxonomy.json", ".")],
-    hiddenimports=["tkinterdnd2", "openpyxl"],
+    binaries=dnd_bins + pandas_binaries,
+    datas=(
+        dnd_datas
+        + pandas_datas
+        + [
+            ("dart_taxonomy.json", "."),
+            ("data",               "data"),
+            ("template",           "template"),
+        ]
+    ),
+    hiddenimports=[
+        "tkinterdnd2",
+        "openpyxl",
+        "pandas",
+    ] + pandas_hiddenimports,
     hookspath=[],
     runtime_hooks=[],
     excludes=[],
@@ -38,7 +53,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name="XBRL_ZIP_to_XLSX",
+    name="XBRL_CoE_Checklist",
     debug=False,
     strip=False,
     upx=True,
@@ -55,11 +70,11 @@ exe = EXE(
 if sys.platform == "darwin":
     app = BUNDLE(
         exe,
-        name="XBRL_ZIP_to_XLSX.app",
+        name="XBRL_CoE_Checklist.app",
         icon=None,
-        bundle_identifier="com.xbrl.zip.to.xlsx",
+        bundle_identifier="com.xbrl.coe.checklist",
         info_plist={
-            "CFBundleDisplayName": "XBRL ZIP to XLSX",
+            "CFBundleDisplayName": "XBRL CoE Checklist",
             "CFBundleShortVersionString": "1.0.0",
             "NSHighResolutionCapable": True,
         },

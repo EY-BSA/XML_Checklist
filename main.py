@@ -1,10 +1,10 @@
 """
-main.py — XBRL ZIP → XLSX 변환기 (드래그앤드롭 GUI)
+main.py — XBRL 체크리스트 실행기 (드래그앤드롭 GUI)
 
 사용법
-  1) 실행하면 작은 창이 뜬다.
+  1) 실행하면 창이 뜬다.
   2) 창 안 영역에 .zip 파일을 드래그해서 놓거나, '파일 선택' 버튼을 누른다.
-  3) 변환이 끝나면 결과 xlsx 가 같은 폴더에 저장된다.
+  3) 완료되면 입력 zip 과 같은 폴더에 XBRL_CoE_Checklist_Result_<회사명>.xlsx 가 저장된다.
 """
 from __future__ import annotations
 
@@ -14,26 +14,30 @@ import threading
 import traceback
 from pathlib import Path
 
-# tkinterdnd2 가 있으면 사용, 없으면 일반 tkinter 만으로 동작
 try:
     from tkinterdnd2 import DND_FILES, TkinterDnD
     _HAS_DND = True
 except Exception:
     _HAS_DND = False
-    import tkinter as TkinterDnD  # type: ignore  # 별칭만 맞춤
-    DND_FILES = None  # type: ignore
+    import tkinter as TkinterDnD  # type: ignore
+    DND_FILES = None               # type: ignore
 
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from xbrl_to_xlsx import convert_zip_to_xlsx
+from xbrl_zip_parser import parse_xbrl_zip
+from checklist_engine import run_all_checks
+from standard_taxonomy import StandardTaxonomy, enrich_axis_domain_check, enrich_dart_negate_check
+from checklist_export import export_checklist
 
 
-APP_TITLE = "XBRL ZIP → XLSX 변환기"
+APP_TITLE = "XBRL CoE 체크리스트"
 DROP_HINT = (
     "여기에 .zip 파일을 드래그하세요\n"
     "(또는 아래 '파일 선택' 버튼을 누르세요)"
 )
+
+_std: StandardTaxonomy | None = None
 
 
 def _resource_path(rel: str) -> str:
@@ -42,30 +46,42 @@ def _resource_path(rel: str) -> str:
     return os.path.join(base, rel)
 
 
+def _get_std() -> StandardTaxonomy:
+    """StandardTaxonomy 싱글턴 — 최초 1회만 로드."""
+    global _std
+    if _std is None:
+        _std = StandardTaxonomy()
+        axis_path  = _resource_path(os.path.join("data", "Axis_Domain_Check.xlsx"))
+        negate_path = _resource_path(os.path.join("data", "DART_Negate_Check.xlsx"))
+        if os.path.exists(axis_path):
+            enrich_axis_domain_check(_std, axis_path)
+        if os.path.exists(negate_path):
+            enrich_dart_negate_check(_std, negate_path)
+    return _std
+
+
 class App:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         root.title(APP_TITLE)
-        root.geometry("520x360")
-        root.minsize(440, 300)
+        root.geometry("520x380")
+        root.minsize(440, 320)
 
-        # ── 헤더 ───────────────────────────────────────
-        header = ttk.Label(
+        # ── 헤더 ─────────────────────────────────────────
+        ttk.Label(
             root, text=APP_TITLE,
             font=("맑은 고딕", 14, "bold"),
             padding=(12, 10, 12, 4),
-        )
-        header.pack(fill="x")
+        ).pack(fill="x")
 
-        sub = ttk.Label(
+        ttk.Label(
             root,
-            text="DART 원문 XBRL ZIP → 다중 시트 xlsx (DataType · Period · Decimal 포함)",
+            text="DART 원문 XBRL ZIP → XBRL_CoE_Checklist_Result.xlsx",
             foreground="#555",
             padding=(12, 0, 12, 8),
-        )
-        sub.pack(fill="x")
+        ).pack(fill="x")
 
-        # ── 드롭 영역 ─────────────────────────────────
+        # ── 드롭 영역 ──────────────────────────────────────
         self.drop_var = tk.StringVar(value=DROP_HINT)
         self.drop = tk.Label(
             root,
@@ -75,23 +91,22 @@ class App:
             relief="ridge",
             bd=2,
             font=("맑은 고딕", 11),
-            wraplength=440,
+            wraplength=460,
             justify="center",
         )
         self.drop.pack(fill="both", expand=True, padx=14, pady=8)
 
         if _HAS_DND:
-            self.drop.drop_target_register(DND_FILES)  # type: ignore[attr-defined]
-            self.drop.dnd_bind("<<Drop>>", self.on_drop)  # type: ignore[attr-defined]
+            self.drop.drop_target_register(DND_FILES)       # type: ignore[attr-defined]
+            self.drop.dnd_bind("<<Drop>>", self.on_drop)    # type: ignore[attr-defined]
 
-        # ── 버튼 줄 ───────────────────────────────────
+        # ── 버튼 줄 ────────────────────────────────────────
         btn_row = ttk.Frame(root, padding=(14, 4, 14, 0))
         btn_row.pack(fill="x")
-
         ttk.Button(btn_row, text="파일 선택…", command=self.choose_file).pack(side="left")
         ttk.Button(btn_row, text="종료", command=root.destroy).pack(side="right")
 
-        # ── 상태 / 진행 ───────────────────────────────
+        # ── 상태 / 진행 ────────────────────────────────────
         self.status = tk.StringVar(value="대기 중")
         ttk.Label(root, textvariable=self.status, padding=(14, 8, 14, 0)).pack(fill="x")
 
@@ -100,7 +115,10 @@ class App:
 
         self._busy = False
 
-    # ── 이벤트 핸들러 ─────────────────────────────────────
+        # 앱 시작 시 표준 택사노미를 백그라운드로 미리 로드
+        threading.Thread(target=_get_std, daemon=True).start()
+
+    # ── 이벤트 핸들러 ───────────────────────────────────────
     def on_drop(self, event) -> None:
         if self._busy:
             return
@@ -109,7 +127,6 @@ class App:
         if not zips:
             messagebox.showwarning(APP_TITLE, ".zip 파일을 드롭해 주세요.")
             return
-        # 여러 개 드롭해도 순차 처리
         threading.Thread(target=self._process_many, args=(zips,), daemon=True).start()
 
     def choose_file(self) -> None:
@@ -123,28 +140,20 @@ class App:
             return
         threading.Thread(target=self._process_many, args=(list(paths),), daemon=True).start()
 
-    # ── 내부 로직 ────────────────────────────────────────
+    # ── 내부 로직 ────────────────────────────────────────────
     @staticmethod
     def _parse_dnd_paths(raw: str) -> list[str]:
-        """
-        tkinterdnd2 의 event.data 는 공백 구분, 경로에 공백이 있으면 {} 로 감싸짐.
-        """
         out: list[str] = []
         buf = ""
         in_brace = False
         for ch in raw:
             if ch == "{":
-                in_brace = True
-                continue
+                in_brace = True; continue
             if ch == "}":
-                in_brace = False
-                out.append(buf)
-                buf = ""
-                continue
+                in_brace = False; out.append(buf); buf = ""; continue
             if ch == " " and not in_brace:
                 if buf:
-                    out.append(buf)
-                    buf = ""
+                    out.append(buf); buf = ""
                 continue
             buf += ch
         if buf:
@@ -163,9 +172,9 @@ class App:
         ok, ng = [], []
         for i, zp in enumerate(zip_paths, 1):
             name = os.path.basename(zp)
-            self.root.after(0, self.status.set, f"[{i}/{len(zip_paths)}] 변환 중… {name}")
+            self.root.after(0, self.status.set, f"[{i}/{len(zip_paths)}] 체크 중… {name}")
             try:
-                out = self._convert_one(zp)
+                out = self._run_one(zp)
                 ok.append(out)
             except Exception as e:
                 ng.append((zp, e))
@@ -174,30 +183,44 @@ class App:
         self.root.after(0, self._set_busy, False)
         self.root.after(0, self._show_result, ok, ng)
 
-    def _convert_one(self, zip_path: str) -> str:
+    def _run_one(self, zip_path: str) -> str:
+        # 1. ZIP 파싱
+        with open(zip_path, "rb") as f:
+            file_bytes = f.read()
+        data = parse_xbrl_zip(file_bytes)
+        if data.errors:
+            raise RuntimeError("\n".join(data.errors))
+
+        # 2. 체크리스트 실행
+        std = _get_std()
+        results = run_all_checks(data, std)
+
+        # 3. 결과 저장 (입력 ZIP 과 같은 폴더)
+        company = data.company_name or (data.entity_id or "XBRL").split("_")[0]
         in_path = Path(zip_path)
-        out_path = in_path.with_suffix(".xlsx")
-        # 이미 같은 이름이 있으면 _converted 추가
-        if out_path.exists():
-            out_path = in_path.with_name(f"{in_path.stem}_converted.xlsx")
-        return convert_zip_to_xlsx(str(in_path), str(out_path))
+        out_path = in_path.parent / f"XBRL_CoE_Checklist_Result_{company}.xlsx"
+
+        template_path = _resource_path(
+            os.path.join("template", "XBRL_CoE_Checklist_Result.xlsx")
+        )
+        return export_checklist(results, template_path, str(out_path))
 
     def _show_result(self, ok: list[str], ng: list[tuple[str, Exception]]) -> None:
         if not ng and ok:
             self.status.set(f"완료 — {len(ok)}개 파일 저장됨")
             self.drop_var.set(
-                "변환 완료!\n\n"
+                "체크리스트 완료!\n\n"
                 + "\n".join(f"• {Path(p).name}" for p in ok)
                 + f"\n\n저장 위치: {Path(ok[0]).parent}"
             )
             messagebox.showinfo(
                 APP_TITLE,
-                "변환이 완료되었습니다.\n" + "\n".join(ok),
+                "체크리스트 결과가 저장되었습니다.\n" + "\n".join(ok),
             )
         elif ng and not ok:
             self.status.set(f"실패 — {len(ng)}개 오류")
             err = "\n\n".join(f"{Path(p).name}\n  → {e}" for p, e in ng)
-            messagebox.showerror(APP_TITLE, "변환 중 오류가 발생했습니다.\n\n" + err)
+            messagebox.showerror(APP_TITLE, "오류가 발생했습니다.\n\n" + err)
         else:
             self.status.set(f"부분 성공 — 성공 {len(ok)}, 실패 {len(ng)}")
             messagebox.showwarning(
@@ -213,7 +236,6 @@ def main() -> None:
     else:
         root = tk.Tk()
     try:
-        # Windows 에서 깔끔한 테마
         style = ttk.Style(root)
         if "vista" in style.theme_names():
             style.theme_use("vista")
@@ -224,7 +246,6 @@ def main() -> None:
 
     App(root)
     if not _HAS_DND:
-        # 드래그앤드롭이 없는 환경에서도 사용 가능하도록 안내
         messagebox.showinfo(
             APP_TITLE,
             "tkinterdnd2 가 설치되어 있지 않아 드래그앤드롭이 비활성화되었습니다.\n"

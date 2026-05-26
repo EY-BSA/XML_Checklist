@@ -43,9 +43,9 @@ def main():
     # ── 완료 메시지 ───────────────────────────────────────────────
     print()
     if sys.platform == "win32":
-        print("빌드 완료!  dist\\XBRL_ZIP_to_XLSX.exe  를 실행하세요.")
+        print("빌드 완료!  dist\\XBRL_CoE_Checklist.exe  를 실행하세요.")
     else:
-        print("빌드 완료!  dist/XBRL_ZIP_to_XLSX.app  을 실행하세요.")
+        print("빌드 완료!  dist/XBRL_CoE_Checklist.app  을 실행하세요.")
 
 if __name__ == "__main__":
     main()
