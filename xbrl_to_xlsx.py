@@ -3,21 +3,12 @@ xbrl_to_xlsx.py
 ────────────────────────────────────────────────────────────────────────────
 XBRL 원문 ZIP (.xsd + _pre.xml + _lab-ko.xml + _lab-en.xml + .xbrl)
    ↓
-'사업보고서_IFRS(원문XBRL)' 형식과 동일한 4-시트 xlsx 생성.
+Presentation 시트 1장 xlsx 생성.
 
 생성되는 시트:
-  1. Concepts      — xsd 의 element 정의 1:1
-                     [id, name, nillable, substitutionGroup, type, balance,
-                      periodType, abstract]
-  2. Presentation  — 모든 presentation row (role/depth 트리 평탄화)
-                     [role, id, label-ko, label-en, depth, order, pref_label,
-                      DataType, Period, Decimal]                     ← 3컬럼 추가
-  3. Label-ko      — concept_id × 12 label role
-                     [id, label, dart_label, terseLabel, negatedLabel,
-                      verboseLabel, totalLabel, negatedTerseLabel, netLabel,
-                      periodStartLabel, commentaryGuidance, periodEndLabel,
-                      negatedTotalLabel]
-  4. Label-en      — 위와 동일 컬럼, 영문 라벨
+  1. Presentation  — Presentation 트리 평탄화 결과
+                     [role, table, id, label-ko, label-en, depth, order,
+                      pref_label, DataType, Period, Decimal]
 """
 from __future__ import annotations
 
@@ -48,6 +39,66 @@ def _load_dart_taxonomy() -> dict[str, dict[str, str]]:
     return _taxonomy_cache
 
 # ───────────────────────────────────────────────────────────────────────────
+# Presentation 후처리
+# ───────────────────────────────────────────────────────────────────────────
+_LABEL_KO_EXCLUDE: frozenset[str] = frozenset({
+    "연결 또는 별도 재무제표 [Table]",
+    "연결 또는 별도 재무제표 [table]",
+    "연결재무제표와 별도재무제표 [축]",
+    "연결재무제표와 별도제무제표 [축]",
+    "연결 또는 별도 재무제표 [domain]",
+    "연결재무제표 [구성요소]",
+    "별도재무제표 [구성요소]",
+})
+
+
+_ROLE_PREFIX_RE = re.compile(r"^\[[A-Z]\d+\]\s*")
+
+
+def _role_to_table_name(role: str) -> str:
+    """'[D210000] 재무상태표, 유동/비유동법 - 연결' → '재무상태표, 유동/비유동법 - 연결'"""
+    return _ROLE_PREFIX_RE.sub("", role).strip()
+
+
+def _postprocess_presentation(rows: list[dict]) -> list[dict]:
+    # 1) id가 'Table'로 끝나는 행을 기준으로 테이블명 전파 (role 경계에서 초기화)
+    current_role: str = ""
+    current_table: str = ""
+    for row in rows:
+        if row["role"] != current_role:
+            current_role = row["role"]
+            current_table = ""
+        if (row["id"] or "").endswith("Table"):
+            current_table = row["label-ko"] or row["id"]
+        row["table"] = current_table
+
+    # 2) Table 행 바로 위 Abstract / TextBlock / Explanatory 행에도 동일 테이블명 소급
+    for i, row in enumerate(rows):
+        if (row["id"] or "").endswith("Table"):
+            j = i - 1
+            while j >= 0 and rows[j]["role"] == row["role"]:
+                pid = rows[j]["id"] or ""
+                if pid.endswith("Abstract") or pid.endswith("TextBlock") or pid.endswith("Explanatory"):
+                    rows[j]["table"] = row["table"]
+                    j -= 1
+                else:
+                    break
+
+    # 3) table이 비어있는 행은 role에서 앞의 '[Dxxxxxx] ' 부분을 제거한 값으로 채움
+    for row in rows:
+        if not row["table"] and row["role"]:
+            row["table"] = _role_to_table_name(row["role"])
+
+    # 4) order 없는 행 삭제
+    rows = [r for r in rows if r["order"] is not None]
+
+    # 5) 특정 label-ko 행 삭제
+    rows = [r for r in rows if r["label-ko"] not in _LABEL_KO_EXCLUDE]
+
+    return rows
+
+
+# ───────────────────────────────────────────────────────────────────────────
 # 네임스페이스
 # ───────────────────────────────────────────────────────────────────────────
 NS = {
@@ -66,38 +117,11 @@ XLINK_ROLE  = f"{{{NS['xlink']}}}role"
 DEFAULT_LABEL_ROLE = "http://www.xbrl.org/2003/role/label"
 
 # ───────────────────────────────────────────────────────────────────────────
-# Label role → xlsx 컬럼 매핑 (reference xlsx 와 동일 순서)
-# ───────────────────────────────────────────────────────────────────────────
-LABEL_ROLE_COLUMNS: list[tuple[str, str]] = [
-    # (컬럼 헤더, role URI suffix or 정확한 URI)
-    ("label",              "http://www.xbrl.org/2003/role/label"),
-    ("dart_label",         "/dart_label"),                                          # DART 확장 (보고서마다 prefix 다름)
-    ("terseLabel",         "http://www.xbrl.org/2003/role/terseLabel"),
-    ("negatedLabel",       "http://www.xbrl.org/2009/role/negatedLabel"),
-    ("verboseLabel",       "http://www.xbrl.org/2003/role/verboseLabel"),
-    ("totalLabel",         "http://www.xbrl.org/2003/role/totalLabel"),
-    ("negatedTerseLabel",  "http://www.xbrl.org/2009/role/negatedTerseLabel"),
-    ("netLabel",           "http://www.xbrl.org/2009/role/netLabel"),
-    ("periodStartLabel",   "http://www.xbrl.org/2003/role/periodStartLabel"),
-    ("commentaryGuidance", "http://www.xbrl.org/2003/role/commentaryGuidance"),
-    ("periodEndLabel",     "http://www.xbrl.org/2003/role/periodEndLabel"),
-    ("negatedTotalLabel",  "http://www.xbrl.org/2009/role/negatedTotalLabel"),
-]
-
-
-# ───────────────────────────────────────────────────────────────────────────
 # 공통 유틸
 # ───────────────────────────────────────────────────────────────────────────
 def href_to_id(href: str) -> str:
     return href.split("#", 1)[1] if "#" in href else href
 
-
-def _match_label_column(role_uri: str, col_uri: str) -> bool:
-    """role_uri 가 col_uri 와 일치하는지 (dart_label 은 suffix 매칭)."""
-    if col_uri.startswith("http"):
-        return role_uri == col_uri
-    # suffix 매칭 (예: '/dart_label')
-    return role_uri.endswith(col_uri)
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -223,16 +247,10 @@ def parse_presentation(
     labels_ko: dict[str, dict[str, str]],
     labels_en: dict[str, dict[str, str]],
     role_def_map: dict[str, str],
-    concepts_by_id: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     tree = ET.parse(path)
     root = tree.getroot()
     rows: list[dict[str, Any]] = []
-    cb = concepts_by_id or {}
-
-    def _is_table(cid: str) -> bool:
-        info = cb.get(cid, {})
-        return "hypercube" in (info.get("substitutionGroup") or "").lower()
 
     for pl in root.iter(f"{{{NS['link']}}}presentationLink"):
         role_uri    = pl.get(XLINK_ROLE, "")
@@ -272,23 +290,19 @@ def parse_presentation(
                 return int(o)
             return o
 
-        current_table: list[str] = [""]  # mutable container for closure
-
         def emit(loc_label: str, depth: int, order_val: float | None, pref_role: str) -> None:
             cid = loc_to_id.get(loc_label, "")
-            if _is_table(cid):
-                current_table[0] = pick_label(labels_ko.get(cid, {}), None) or cid
             ko = pick_label(labels_ko.get(cid, {}), pref_role or None)
             en = pick_label(labels_en.get(cid, {}), pref_role or None)
             rows.append({
-                "role":          role_label,
-                "table":         current_table[0],
-                "id":            cid,
-                "label-ko":      ko,
-                "label-en":      en,
-                "depth":         depth,
-                "order":         order_to_excel(order_val),
-                "pref_label":    pref_role or None,
+                "role":       role_label,
+                "table":      "",
+                "id":         cid,
+                "label-ko":   ko,
+                "label-en":   en,
+                "depth":      depth,
+                "order":      order_to_excel(order_val),
+                "pref_label": pref_role or None,
             })
 
         def dfs(loc_label: str, depth: int, order_val: float | None, pref_role: str) -> None:
@@ -407,22 +421,6 @@ def _split_concept_id(cid: str) -> tuple[str, str]:
     return pre, rest
 
 
-def _write_concepts(ws, concept_rows: list[dict[str, Any]]) -> None:
-    headers = ["id", "name", "nillable", "substitutionGroup",
-               "type", "balance", "periodType", "abstract"]
-    ws.append(headers)
-    for c in ws[1]:
-        c.font = BOLD
-        c.fill = HEADER_FILL
-    for r in concept_rows:
-        ws.append([r.get(h) for h in headers])
-    # 컬럼 폭
-    widths = {"A": 64, "B": 50, "C": 10, "D": 22, "E": 26,
-              "F": 10, "G": 12, "H": 10}
-    for col, w in widths.items():
-        ws.column_dimensions[col].width = w
-    ws.freeze_panes = "A2"
-
 
 def _write_presentation(
     ws,
@@ -460,51 +458,12 @@ def _write_presentation(
     ws.freeze_panes = "A2"
 
 
-def _write_label_sheet(
-    ws,
-    labels: dict[str, dict[str, str]],
-    ordered_ids: list[str],
-) -> None:
-    headers = ["id"] + [col for col, _ in LABEL_ROLE_COLUMNS]
-    ws.append(headers)
-    for c in ws[1]:
-        c.font = BOLD
-        c.fill = HEADER_FILL
-
-    # 한 concept 의 라벨이 하나라도 있는 경우만 출력
-    for cid in ordered_ids:
-        by_role = labels.get(cid)
-        if not by_role:
-            continue
-        out_row: list[Any] = [cid]
-        for _, role_match in LABEL_ROLE_COLUMNS:
-            # exact URI 또는 suffix 매칭
-            value = None
-            for ru, txt in by_role.items():
-                if _match_label_column(ru, role_match):
-                    value = txt
-                    break
-            out_row.append(value)
-        # 모든 라벨이 비어있는 행은 제외
-        if any(v not in (None, "") for v in out_row[1:]):
-            ws.append(out_row)
-
-    widths = {"A": 60}
-    for i, _ in enumerate(LABEL_ROLE_COLUMNS, start=2):
-        col_letter = chr(ord("A") + i - 1) if i <= 26 else None
-        if col_letter:
-            widths[col_letter] = 30
-    for col, w in widths.items():
-        ws.column_dimensions[col].width = w
-    ws.freeze_panes = "B2"
-
-
 # ───────────────────────────────────────────────────────────────────────────
 # 7) 메인 엔트리
 # ───────────────────────────────────────────────────────────────────────────
 def convert_zip_to_xlsx(zip_path: str, out_path: str) -> str:
     """
-    XBRL ZIP 파일을 4-시트 xlsx 로 변환.
+    XBRL ZIP 파일을 Presentation 1-시트 xlsx 로 변환.
 
     Returns: 실제로 저장된 xlsx 경로
     """
@@ -515,7 +474,7 @@ def convert_zip_to_xlsx(zip_path: str, out_path: str) -> str:
 
         files = _resolve_xbrl_files(tmp_dir)
 
-        concept_rows, concepts_by_id, role_def = parse_xsd(files["xsd"])
+        _, concepts_by_id, role_def = parse_xsd(files["xsd"])
 
         # dart_taxonomy.json 으로 ifrs-full / dart concept 보완
         for cid, info in _load_dart_taxonomy().items():
@@ -533,41 +492,20 @@ def convert_zip_to_xlsx(zip_path: str, out_path: str) -> str:
 
         labels_ko = parse_labels(files["lab_ko"])
         labels_en = parse_labels(files["lab_en"])
-        presentation_rows = parse_presentation(
-            files["pre"], labels_ko, labels_en, role_def, concepts_by_id
+        presentation_rows = _postprocess_presentation(
+            parse_presentation(files["pre"], labels_ko, labels_en, role_def)
         )
         facts = parse_instance_facts(files["xbrl"]) if files["xbrl"] else {}
-
-        # Label 시트는 라벨에 등장하는 모든 concept_id 출력
-        # 순서: presentation 등장 순서 + 그 외 concept_id 순서
-        seen: set[str] = set()
-        ordered_ids: list[str] = []
-        for r in presentation_rows:
-            cid = r["id"]
-            if cid and cid not in seen:
-                seen.add(cid)
-                ordered_ids.append(cid)
-        for cid in labels_ko:
-            if cid not in seen:
-                seen.add(cid)
-                ordered_ids.append(cid)
-        for cid in labels_en:
-            if cid not in seen:
-                seen.add(cid)
-                ordered_ids.append(cid)
 
         wb = Workbook()
         wb.remove(wb.active)
 
-        _write_concepts(wb.create_sheet("Concepts"), concept_rows)
         _write_presentation(
             wb.create_sheet("Presentation"),
             presentation_rows,
             concepts_by_id,
             facts,
         )
-        _write_label_sheet(wb.create_sheet("Label-ko"), labels_ko, ordered_ids)
-        _write_label_sheet(wb.create_sheet("Label-en"), labels_en, ordered_ids)
 
         Path(out_path).parent.mkdir(parents=True, exist_ok=True)
         wb.save(out_path)
@@ -580,8 +518,7 @@ def convert_zip_to_xlsx(zip_path: str, out_path: str) -> str:
 if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser(
-        description="XBRL ZIP → 4-시트 xlsx (Concepts/Presentation/Label-ko/Label-en, "
-                    "Presentation 에 DataType·Period·Decimal 컬럼 추가)"
+        description="XBRL ZIP → Presentation 1-시트 xlsx (DataType·Period·Decimal 포함)"
     )
     ap.add_argument("zip_path", help="입력 XBRL zip 파일")
     ap.add_argument("--out", help="출력 xlsx 경로 (기본: zip 과 동일 이름.xlsx)")
