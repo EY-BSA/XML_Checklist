@@ -91,6 +91,7 @@ def _classify_element(name: str) -> str:
         'lock': 'TextBlock',
         'able': 'Table',
         'mber': 'Member',
+        'main': 'Domain',
     }.get(suffix, 'item')
     if 'lineitem' in name.lower():
         element = 'Lineitem'
@@ -388,6 +389,10 @@ def _parse_presentation(
 
             gubn    = _classify_gubn(name)
             element = _classify_element(name)
+            # Axis 바로 아래 첫 번째 자식은 Domain (이름과 무관하게 위치로 강제 분류)
+            if par_gubn == 'Axis':
+                gubn    = 'Domain'
+                element = 'Domain'
             ext     = '확장' if prefix.startswith('entity') else '-'
             client_negate = 'negate' if 'negated' in lbl_role.lower() else '-'
             alias   = '별칭'  if 'terse'   in lbl_role.lower() else '-'
