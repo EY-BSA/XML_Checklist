@@ -486,6 +486,45 @@ def _extract_company_name(xbrl_path: str) -> str:
     return ""
 
 
+# ── table_name_ko 후처리 ─────────────────────────────────────────────────────
+
+def _postprocess_table_name(rows: list[dict]) -> None:
+    """
+    1) TABLE 행 기준으로 이후 행에 table_name_ko 전파 (role 경계에서 초기화)
+    2) TABLE 행 바로 위 연속된 Abstract / TextBlock / Explanatory 행에 소급 적용
+    3) 여전히 비어 있는 행은 role_name_ko (role에서 [코드] 접두어 제거한 값)으로 채움
+    """
+    # 1) 전방 전파 (현재 make_row 에서 이미 수행되나 role 경계 초기화 보완)
+    current_role = ""
+    current_table = ""
+    for row in rows:
+        if row.get("role_uri", "") != current_role:
+            current_role = row.get("role_uri", "")
+            current_table = ""
+        if row.get("구분") == "TABLE":
+            current_table = row.get("Label(KO)") or row.get("Name", "")
+        row["table_name_ko"] = current_table
+
+    # 2) 역소급: TABLE 행 바로 위 Abstract / TextBlock / Explanatory 연속 행
+    for i, row in enumerate(rows):
+        if row.get("구분") == "TABLE":
+            j = i - 1
+            while j >= 0 and rows[j].get("role_uri") == row.get("role_uri"):
+                elem = rows[j].get("Element", "")
+                if elem in ("Abstract", "TextBlock", "Explanatory"):
+                    rows[j]["table_name_ko"] = row["table_name_ko"]
+                    j -= 1
+                else:
+                    break
+
+    # 3) 여전히 빈 행 → role_name_ko 사용
+    for row in rows:
+        if not row.get("table_name_ko"):
+            role_def = row.get("Role Definition", "")
+            name_ko = re.sub(r"^\[[^\]]+\]\s*", "", role_def.split("|", 1)[0]).strip()
+            row["table_name_ko"] = name_ko
+
+
 # ── 파일 자동 탐지 ────────────────────────────────────────────────────────────
 
 def _find(directory: str, suffix: str) -> str:
@@ -539,6 +578,7 @@ def parse_xbrl_zip(file_bytes: bytes) -> XBRLData:
         )
 
         _add_axis_group_fields(rows)
+        _postprocess_table_name(rows)
 
         data.presentation_rows = rows
         data.elements          = elements

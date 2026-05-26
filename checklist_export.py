@@ -12,6 +12,34 @@ from pathlib import Path
 
 _DRAWING_PAT = re.compile(rb'<(?:legacyDrawing|drawing)[^>]*/>')
 
+# role_code 접두어 → 본문 재무제표 순서 (그 외는 주석으로 처리)
+_STMT_ORDER = {'D2': 0, 'D4': 1, 'D6': 2, 'D5': 3}
+
+
+def _issue_sort_key(iss):
+    """연결→별도, 재무상태표→손익→자본변동→현금흐름→주석(번호순)"""
+    rc = iss.role_code or ''
+
+    # 연결(0) / 별도(1) / 미분류(2)
+    if iss.is_consolidated is True:
+        consol = 0
+    elif iss.is_consolidated is False:
+        consol = 1
+    else:
+        consol = 2
+
+    # 본문 재무제표 순서 (D2/D4/D6/D5) vs 주석(4)
+    stmt = _STMT_ORDER.get(rc[:2], 4)
+
+    # 주석이면 role_name_ko 앞 숫자("24. 법인세비용" → 24) 추출
+    if stmt == 4:
+        m = re.match(r'(\d+)\.', (iss.role_name_ko or '').strip())
+        note_num = int(m.group(1)) if m else 9999
+    else:
+        note_num = 0
+
+    return (consol, stmt, note_num, rc)
+
 
 def _role_def(iss) -> str:
     rc = iss.role_code; ko = iss.role_name_ko; en = iss.role_name_en
@@ -94,10 +122,12 @@ def export_checklist(results: OrderedDict, template_path: str, out_path: str) ->
         ws['B11'] = chk.issue_count
         modified.add(sheet_name)
 
-        for ri, iss in enumerate(chk.issues[:500], 14):
+        sorted_issues = sorted(chk.issues, key=_issue_sort_key)
+        for ri, iss in enumerate(sorted_issues[:500], 14):
             if chk_id == '5-6':
-                ws.cell(ri, 2, _tbl_name(iss))
-                ws.cell(ri, 3, '단위미표시')
+                ws.cell(ri, 2, _role_def(iss))
+                ws.cell(ri, 3, _tbl_name(iss))
+                ws.cell(ri, 4, '단위미표시')
             elif chk_id == '7-1':
                 _write_std(ws, ri, iss)
                 ws.cell(ri, 11, iss.dart_negate)
