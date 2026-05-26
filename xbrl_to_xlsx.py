@@ -223,10 +223,16 @@ def parse_presentation(
     labels_ko: dict[str, dict[str, str]],
     labels_en: dict[str, dict[str, str]],
     role_def_map: dict[str, str],
+    concepts_by_id: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     tree = ET.parse(path)
     root = tree.getroot()
     rows: list[dict[str, Any]] = []
+    cb = concepts_by_id or {}
+
+    def _is_table(cid: str) -> bool:
+        info = cb.get(cid, {})
+        return "hypercube" in (info.get("substitutionGroup") or "").lower()
 
     for pl in root.iter(f"{{{NS['link']}}}presentationLink"):
         role_uri    = pl.get(XLINK_ROLE, "")
@@ -266,18 +272,23 @@ def parse_presentation(
                 return int(o)
             return o
 
+        current_table: list[str] = [""]  # mutable container for closure
+
         def emit(loc_label: str, depth: int, order_val: float | None, pref_role: str) -> None:
             cid = loc_to_id.get(loc_label, "")
+            if _is_table(cid):
+                current_table[0] = pick_label(labels_ko.get(cid, {}), None) or cid
             ko = pick_label(labels_ko.get(cid, {}), pref_role or None)
             en = pick_label(labels_en.get(cid, {}), pref_role or None)
             rows.append({
-                "role":       role_label,
-                "id":         cid,
-                "label-ko":   ko,
-                "label-en":   en,
-                "depth":      depth,
-                "order":      order_to_excel(order_val),
-                "pref_label": pref_role or None,
+                "role":          role_label,
+                "table":         current_table[0],
+                "id":            cid,
+                "label-ko":      ko,
+                "label-en":      en,
+                "depth":         depth,
+                "order":         order_to_excel(order_val),
+                "pref_label":    pref_role or None,
             })
 
         def dfs(loc_label: str, depth: int, order_val: float | None, pref_role: str) -> None:
@@ -419,8 +430,8 @@ def _write_presentation(
     concepts_by_id: dict[str, dict[str, Any]],
     facts: dict[str, list[dict[str, str]]],
 ) -> None:
-    headers = ["role", "id", "label-ko", "label-en", "depth", "order", "pref_label",
-               "DataType", "Period", "Decimal"]   # ← 마지막 3개가 추가 컬럼
+    headers = ["role", "table", "id", "label-ko", "label-en", "depth", "order", "pref_label",
+               "DataType", "Period", "Decimal"]
     ws.append(headers)
     for c in ws[1]:
         c.font = BOLD
@@ -437,13 +448,13 @@ def _write_presentation(
         decimal = pick_decimal(local_name, facts)
 
         ws.append([
-            row["role"], cid, row["label-ko"], row["label-en"],
+            row["role"], row["table"], cid, row["label-ko"], row["label-en"],
             row["depth"], row["order"], row["pref_label"],
             data_type, period, decimal,
         ])
 
-    widths = {"A": 50, "B": 60, "C": 50, "D": 50, "E": 8,
-              "F": 8, "G": 50, "H": 22, "I": 12, "J": 10}
+    widths = {"A": 50, "B": 50, "C": 60, "D": 50, "E": 50, "F": 8,
+              "G": 8, "H": 50, "I": 22, "J": 12, "K": 10}
     for col, w in widths.items():
         ws.column_dimensions[col].width = w
     ws.freeze_panes = "A2"
@@ -523,7 +534,7 @@ def convert_zip_to_xlsx(zip_path: str, out_path: str) -> str:
         labels_ko = parse_labels(files["lab_ko"])
         labels_en = parse_labels(files["lab_en"])
         presentation_rows = parse_presentation(
-            files["pre"], labels_ko, labels_en, role_def
+            files["pre"], labels_ko, labels_en, role_def, concepts_by_id
         )
         facts = parse_instance_facts(files["xbrl"]) if files["xbrl"] else {}
 
