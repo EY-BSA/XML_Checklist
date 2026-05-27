@@ -30,7 +30,6 @@ checklist_engine.py  — XML 아웃풋 시트 번호 기준 완전 구현 (29개
   6-2  멤버 합계열 확장 검토
   6-3  Duration / Instant 속성 검토    ← 추가 항목
   7-1  Client Negate 검토
-  7-2  현금흐름표 영업활동 현금흐름 검토
 """
 
 import os
@@ -1150,39 +1149,39 @@ def _c7_1(rows, data):
     return r
 
 
-def _c7_2(rows, data):
-    """7-2: 현금흐름표 영업활동 현금흐름 검토
-    Alteryx 로직 (Node 423→428→424→429):
-      Filter(423): TABLE_NUMBER가 D851100 또는 D851105('CF_DIRECT_TABLES')인 라인
-      Multi-Row Formula(428): NextValue = 다음 행의 Name
-      Filter(424): Name에 CashFlowsFromUsedInOperatingActivitiesLineItems 포함된 라인만
-      Filter(429): NextValue가 ProfitLoss가 아닌 라인만
-    """
-    r = CheckResult('7-2', '현금흐름표 영업활동 현금흐름 검토',
-        '현금흐름표 직접법(D851100/D851105)에서 '
-        'CashFlowsFromUsedInOperatingActivitiesLineItems를 제외한 라인 중 '
-        'NextValue가 ProfitLoss가 아닌 경우를 검출합니다.',
-        '기타', 'Checklist_7-2')
+# def _c7_2(rows, data):
+#     """7-2: 현금흐름표 영업활동 현금흐름 검토
+#     Alteryx 로직 (Node 423→428→424→429):
+#       Filter(423): TABLE_NUMBER가 D851100 또는 D851105('CF_DIRECT_TABLES')인 라인
+#       Multi-Row Formula(428): NextValue = 다음 행의 Name
+#       Filter(424): Name에 CashFlowsFromUsedInOperatingActivitiesLineItems 포함된 라인만
+#       Filter(429): NextValue가 ProfitLoss가 아닌 라인만
+#     """
+#     r = CheckResult('7-2', '현금흐름표 영업활동 현금흐름 검토',
+#         '현금흐름표 직접법(D851100/D851105)에서 '
+#         'CashFlowsFromUsedInOperatingActivitiesLineItems를 제외한 라인 중 '
+#         'NextValue가 ProfitLoss가 아닌 경우를 검출합니다.',
+#         '기타', 'Checklist_7-2')
 
-    table_groups: Dict[tuple, List[dict]] = defaultdict(list)
-    for row in rows:
-        if row.get('TABLE_NUMBER') in CF_DIRECT_TABLES:
-            key = (row.get('role_uri', ''), row.get('TABLE_NUMBER', ''))
-            table_groups[key].append(row)
+#     table_groups: Dict[tuple, List[dict]] = defaultdict(list)
+#     for row in rows:
+#         if row.get('TABLE_NUMBER') in CF_DIRECT_TABLES:
+#             key = (row.get('role_uri', ''), row.get('TABLE_NUMBER', ''))
+#             table_groups[key].append(row)
 
-    for key, grp_rows in table_groups.items():
-        for i, row in enumerate(grp_rows):
-            next_name = grp_rows[i + 1].get('Name', '') if i + 1 < len(grp_rows) else ''
+#     for key, grp_rows in table_groups.items():
+#         for i, row in enumerate(grp_rows):
+#             next_name = grp_rows[i + 1].get('Name', '') if i + 1 < len(grp_rows) else ''
 
-            if CF_OPERATING_LINEITEM not in row.get('Name', ''):
-                continue
+#             if CF_OPERATING_LINEITEM not in row.get('Name', ''):
+#                 continue
 
-            if next_name == 'ProfitLoss':
-                continue
+#             if next_name == 'ProfitLoss':
+#                 continue
 
-            r.issues.append(_mk(row,
-                f'NextValue: {next_name} — 영업활동 현금흐름 구조 검토 필요', data))
-    return r
+#             r.issues.append(_mk(row,
+#                 f'NextValue: {next_name} — 영업활동 현금흐름 구조 검토 필요', data))
+#     return r
 
 
 # ═════════════════════════════════════════════════════════════════════════════

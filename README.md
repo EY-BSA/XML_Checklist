@@ -111,7 +111,6 @@ XBRL_CoE_Checklist_Result_<회사명>.xlsx
 | 6-2 | 멤버 합계열 확장 검토 |
 | 6-3 | Duration / Instant 속성 검토 |
 | 7-1 | Client Negate 검토 |
-| 7-2 | 현금흐름표 영업활동 현금흐름 검토 |
 
 ---
 
