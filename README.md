@@ -48,8 +48,7 @@ zip_cleansing/
 **출력 파일명 형식**
 
 ```
-FY25_4Q_XBRL_Checklist_Result_하이비젼시스템_20260527_153844.xlsx
-FY26_1Q_XBRL_Checklist_Result_씨제이프레시웨이(주)_20260527_153844.xlsx
+FY00_NQ_XBRL_Checklist_Result_기업명_YYYYMMDD_HHMMSS.xlsx
 ```
 
 | 구성 | 설명 |
