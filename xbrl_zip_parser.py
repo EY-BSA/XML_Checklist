@@ -123,11 +123,11 @@ def _add_axis_group_fields(rows: list) -> None:
         for _, (orig_idx, row) in enumerate(indexed_rows):
             element = row.get('Element', '')
 
-            if prev_element == 'Axis' and element == 'Member':
+            if prev_element == 'Axis' and element in ('Member', 'Domain'):
                 axis_domain = '도메인'
             elif element == 'Axis':
                 axis_domain = '축'
-            elif element == 'Member' and prev_axis_domain in ('축', '도메인', '멤버'):
+            elif element in ('Member', 'Domain') and prev_axis_domain in ('축', '도메인', '멤버'):
                 axis_domain = '멤버'
             else:
                 axis_domain = None
@@ -179,6 +179,8 @@ class XBRLData:
         self.company_name: str        = ''
         self.report_date:  str        = ''
         self.entity_id:    str        = ''
+        self.fy:           str        = ''
+        self.report_period: str       = ''
         self.presentation_rows: List[dict] = []
         self.errors:        List[str] = []
         self.axis_domain_rows: List[dict] = []
@@ -465,25 +467,50 @@ def _parse_presentation(
     return rows, elements
 
 
-# ── 회사명 추출 ───────────────────────────────────────────────────────────────
+# ── 회사명 / 기간 추출 ────────────────────────────────────────────────────────
+
+_PERIOD_SUFFIX_MAP = {
+    'FY':  '4Q',
+    'FQA': '1Q', 'FQQ': '1Q',
+    'HY':  '2Q',
+    'TQA': '3Q', 'TQQ': '3Q',
+}
+_CTX_RE = re.compile(r'^CFY(\d{4})[de]([A-Z]+)')
+
 
 def _extract_company_name(xbrl_path: str) -> str:
-    """
-    .xbrl 인스턴스에서 EntityRegistrantName(한글) 추출.
-    없으면 빈 문자열 반환.
-    """
+    """.xbrl 인스턴스에서 EntityRegistrantName(한글) 추출."""
     try:
         for _, el in ET.iterparse(xbrl_path, events=("end",)):
             tag = el.tag
             if tag.endswith("}EntityRegistrantName") and el.text:
                 text = el.text.strip()
-                # 한글이 포함된 값 우선 반환
                 if any('가' <= c <= '힣' for c in text):
                     return text
             el.clear()
     except Exception:
         pass
     return ""
+
+
+def _extract_period_info(xbrl_path: str) -> tuple[str, str]:
+    """
+    당기(C) 컨텍스트 ID에서 회계연도·분기 추출.
+    반환: (fy, period)  예) ('FY25', '1Q') / ('FY25', 'Annual')
+    """
+    try:
+        for _, el in ET.iterparse(xbrl_path, events=("start",)):
+            if el.tag.endswith('}context'):
+                m = _CTX_RE.match(el.get('id', ''))
+                if m:
+                    year   = m.group(1)[2:]
+                    suffix = m.group(2)
+                    period = _PERIOD_SUFFIX_MAP.get(suffix, suffix)
+                    return f'FY{year}', period
+            el.clear()
+    except Exception:
+        pass
+    return '', ''
 
 
 # ── table_name_ko 후처리 ─────────────────────────────────────────────────────
@@ -562,10 +589,11 @@ def parse_xbrl_zip(file_bytes: bytes) -> XBRLData:
 
         data.entity_id = Path(xsd_path).stem
 
-        # 회사명: .xbrl 인스턴스의 EntityRegistrantName(한글)
+        # 회사명 / 회계연도 / 분기: .xbrl 인스턴스에서 추출
         try:
             xbrl_path = _find(tmp_dir, ".xbrl")
             data.company_name = _extract_company_name(xbrl_path)
+            data.fy, data.report_period = _extract_period_info(xbrl_path)
         except Exception:
             pass
 

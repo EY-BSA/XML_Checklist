@@ -1,6 +1,6 @@
 # XBRL CoE 체크리스트 도구
 
-DART 원문 XBRL ZIP 파일을 입력받아 29개 검증 항목을 자동으로 체크하고 결과를 xlsx로 저장합니다.
+DART 원문 XBRL ZIP 파일을 입력받아 28개 검증 항목을 자동으로 체크하고 결과를 xlsx로 저장합니다.
 
 **Windows / macOS 모두 지원합니다.**
 
@@ -12,7 +12,7 @@ DART 원문 XBRL ZIP 파일을 입력받아 29개 검증 항목을 자동으로 
 zip_cleansing/
 ├── main.py                # 드래그앤드롭 GUI 실행기
 ├── xbrl_zip_parser.py     # ZIP 파서 (XBRL 구조 분석)
-├── checklist_engine.py    # 29개 체크리스트 엔진
+├── checklist_engine.py    # 28개 체크리스트 엔진
 ├── checklist_export.py    # xlsx 결과 내보내기
 ├── standard_taxonomy.py   # 표준 택사노미 로더
 ├── xbrl_to_xlsx.py        # Presentation 구조 분석 도구 (CLI 단독 실행 가능)
@@ -43,7 +43,21 @@ zip_cleansing/
 
 1. 실행파일을 실행합니다.
 2. 창 안에 `.zip` 파일을 드래그하거나 `파일 선택…` 버튼을 누릅니다.
-3. 완료되면 입력 zip과 같은 폴더에 `XBRL_CoE_Checklist_Result_<회사명>.xlsx`가 저장됩니다.
+3. 완료되면 입력 zip과 같은 폴더에 결과 파일이 저장됩니다.
+
+**출력 파일명 형식**
+
+```
+FY25_4Q_XBRL_Checklist_Result_하이비젼시스템_20260527_153844.xlsx
+FY26_1Q_XBRL_Checklist_Result_씨제이프레시웨이(주)_20260527_153844.xlsx
+```
+
+| 구성 | 설명 |
+|------|------|
+| `FY25` | 회계연도 (`.xbrl` 컨텍스트에서 자동 추출) |
+| `4Q / 1Q / 2Q / 3Q` | 보고서 종류 (사업보고서=4Q, 분기·반기보고서 자동 구분) |
+| `회사명` | XBRL 인스턴스의 EntityRegistrantName (한글) |
+| `날짜시분초` | 실행 시점 타임스탬프 |
 
 ### 소스 코드로 실행
 
@@ -57,29 +71,36 @@ python main.py
 ## 전체 데이터 흐름
 
 ```
-DART 원문 ZIP
+DART 원문 ZIP  (루트 직접 또는 EntityTaxonomy/ 하위 폴더 구조 모두 지원)
     │
     ▼
 xbrl_zip_parser.py
-    ├── .xsd           → concept 정의 (DataType·Period·Balance)
+    ├── .xsd            → concept 정의 (DataType·Period·Balance)
     ├── dart_taxonomy.json → ifrs-full/dart 표준 concept 보완
     ├── *_lab-ko/en.xml → 한글/영문 label
     ├── *_pre.xml       → Presentation 트리 구조
-    └── *.xbrl          → 인스턴스 fact (회사명·Decimal 값)
+    └── *.xbrl          → 회사명·회계연도·분기 추출
+    │
+    ▼  [후처리]
+    ├── Element/구분 분류: Axis 직하 자식 → Domain으로 강제 분류
+    ├── table_name_ko 채우기: TABLE 전파 → Abstract/Explanatory 역소급 → role명 채우기
+    └── 축-도메인 그룹 키 생성 (KEY_axis, GroupID 등)
     │
     ▼
-checklist_engine.py  (29개 항목 검증)
+checklist_engine.py  (28개 항목 검증)
     │
     ▼
 checklist_export.py
+    ├── 이슈 정렬: 연결→별도, 재무상태표→손익→자본변동→현금흐름→주석(번호순)
+    └── xlsx 템플릿에 기록
     │
     ▼
-XBRL_CoE_Checklist_Result_<회사명>.xlsx
+FY{연도}_{분기}_XBRL_Checklist_Result_{회사명}_{날짜시분초}.xlsx
 ```
 
 ---
 
-## 체크리스트 항목 (29개)
+## 체크리스트 항목 (28개)
 
 | 번호 | 항목 |
 |------|------|
@@ -112,6 +133,8 @@ XBRL_CoE_Checklist_Result_<회사명>.xlsx
 | 6-3 | Duration / Instant 속성 검토 |
 | 7-1 | Client Negate 검토 |
 
+> 7-2 (현금흐름표 영업활동 현금흐름 검토)는 미구현 상태입니다.
+
 ---
 
 ## 입력 ZIP 구성
@@ -122,7 +145,9 @@ XBRL_CoE_Checklist_Result_<회사명>.xlsx
 | `*_pre.xml` | Presentation linkbase (트리 구조) |
 | `*_lab-ko.xml` | 한글 label |
 | `*_lab-en.xml` | 영문 label |
-| `*.xbrl` | 인스턴스 파일 — 회사명·Decimal 값 |
+| `*.xbrl` | 인스턴스 파일 — 회사명·회계연도·분기 추출 |
+
+ZIP 내부 파일이 루트에 있거나 `EntityTaxonomy/` 등 하위 폴더에 있어도 자동으로 인식합니다.
 
 ---
 

@@ -999,7 +999,7 @@ def _c5_6(rows, data):
 
     # Step 1: 단위표시구분 생성
     df['단위표시구분'] = df['DataType'].apply(
-        lambda x: '단위표시숫자' if x == 'monetaryItemType' else '단위표시 불필요'
+        lambda x: '단위표시숫자' if 'monetaryItemType' in str(x) else '단위표시 불필요'
     )
 
     # Step 2 & 3: CNT 열 생성

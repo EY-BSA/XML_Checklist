@@ -12,6 +12,7 @@ import os
 import sys
 import threading
 import traceback
+from datetime import datetime
 from pathlib import Path
 
 try:
@@ -196,9 +197,18 @@ class App:
         results = run_all_checks(data, std)
 
         # 3. 결과 저장 (입력 ZIP 과 같은 폴더)
-        company = data.company_name or (data.entity_id or "XBRL").split("_")[0]
-        in_path = Path(zip_path)
-        out_path = in_path.parent / f"XBRL_CoE_Checklist_Result_{company}.xlsx"
+        company   = data.company_name or (data.entity_id or "XBRL").split("_")[0]
+        fy        = data.fy or ''
+        period    = data.report_period or ''
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        # FY25_1Q_XBRL_Checklist_Result_기업명_날짜시분초.xlsx
+        prefix = '_'.join(p for p in [fy, period] if p)
+        fname  = f"{prefix}_XBRL_Checklist_Result_{company}_{timestamp}.xlsx" if prefix \
+                 else f"XBRL_Checklist_Result_{company}_{timestamp}.xlsx"
+
+        in_path  = Path(zip_path)
+        out_path = in_path.parent / fname
 
         template_path = _resource_path(
             os.path.join("template", "XBRL_CoE_Checklist_Result.xlsx")
