@@ -1148,7 +1148,7 @@ def _c7_1(rows, data):
 
     return r
 
-
+# 7-2 각주 처리
 # def _c7_2(rows, data):
 #     """7-2: 현금흐름표 영업활동 현금흐름 검토
 #     Alteryx 로직 (Node 423→428→424→429):
