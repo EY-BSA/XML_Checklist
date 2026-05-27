@@ -301,7 +301,7 @@ def run_all_checks(data, std=None) -> OrderedDict:
         ('6-2', _c6_2(rows, data)),
         ('6-3', _c6_3(rows, data)),   # Duration/Instant (추가)
         ('7-1', _c7_1(rows, data)),   # Negate (0511: pandas 기반)
-        ('7-2', _c7_2(rows, data)),   # CF 영업활동
+        # ('7-2', _c7_2(rows, data)),   # CF 영업활동 (미구현)
     ])
 
 
