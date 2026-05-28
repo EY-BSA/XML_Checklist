@@ -627,6 +627,9 @@ def _c3_1(rows, data):
         'axis_domain_rows의 KEY 값이 Axis_Domain_Check의 KEY와 일치하지 않는 경우 검출합니다.',
         '축-멤버 정합성 검토', 'Checklist_3-1')
 
+    # 같은 TABLE_NUMBER 내 동일 KEY_axis 이슈는 1건으로 집계
+    seen_issues: set[tuple] = set()
+
     for row in rows:
         key_val = str(row.get('KEY_axis') or '')
 
@@ -646,6 +649,10 @@ def _c3_1(rows, data):
         if (status == 'CHECK'
                 and row.get('확장여부') != '확장'
                 and row.get('축_도메인') == '멤버'):
+            dedup_key = (row.get('TABLE_NUMBER', ''), key_val)
+            if dedup_key in seen_issues:
+                continue
+            seen_issues.add(dedup_key)
             r.issues.append(_mk(row,
                 f'KEY: {key_val} / KEY2: {key2} — 축-멤버 구조 검토 필요', data))
 
