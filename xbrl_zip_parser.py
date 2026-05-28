@@ -119,24 +119,19 @@ def _add_axis_group_fields(rows: list) -> None:
         prev_axis_domain = None
         prev_group_id    = None
         prev_axis_name   = None
-        prev_domain_name = None
 
         for _, (orig_idx, row) in enumerate(indexed_rows):
             element = row.get('Element', '')
             name    = row.get('Name', '')
 
             if prev_element == 'Axis' and element in ('Member', 'Domain'):
-                axis_domain  = '도메인'
-                domain_name  = name
+                axis_domain = '도메인'
             elif element == 'Axis':
-                axis_domain  = '축'
-                domain_name  = None
+                axis_domain = '축'
             elif element in ('Member', 'Domain') and prev_axis_domain in ('축', '도메인', '멤버'):
-                axis_domain  = '멤버'
-                domain_name  = prev_domain_name
+                axis_domain = '멤버'
             else:
-                axis_domain  = None
-                domain_name  = None
+                axis_domain = None
 
             axis_flag = 1 if axis_domain == '축' else 0
 
@@ -156,18 +151,13 @@ def _add_axis_group_fields(rows: list) -> None:
 
             # Axis = Axis
             # Domain = Axis-Domain
-            # Member = Axis-Domain-Member
+            # Member = Axis-Member
             if axis_domain == '축':
                 key = axis_name or None
             elif axis_domain == '도메인':
                 key = f"{axis_name}-{name}" if axis_name else None
             elif axis_domain == '멤버':
-                if axis_name and domain_name:
-                    key = f"{axis_name}-{domain_name}-{name}"
-                elif axis_name:
-                    key = f"{axis_name}-{name}"
-                else:
-                    key = None
+                key = f"{axis_name}-{name}" if axis_name else None
             else:
                 key = None
 
@@ -183,7 +173,6 @@ def _add_axis_group_fields(rows: list) -> None:
             prev_axis_domain = axis_domain
             prev_group_id    = group_id
             prev_axis_name   = axis_name
-            prev_domain_name = domain_name
 
 
 # ── taxonomy_xlsx_parser.TaxonomyXlsxData 호환 클래스 ────────────────────────
