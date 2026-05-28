@@ -175,6 +175,21 @@ def _add_axis_group_fields(rows: list) -> None:
             prev_axis_name   = axis_name
 
 
+def _remap_gubn_alteryx(rows: list) -> None:
+    """Alteryx 원본 3-value 구분 체계로 재분류.
+    TABLE → 'TABLE', Axis·Domain·Member → 'DOMAIN', 나머지 → 'LINEITEM'
+    """
+    for row in rows:
+        ad = row.get('축_도메인')
+        g  = row.get('구분', '')
+        if g == 'TABLE':
+            row['구분'] = 'TABLE'
+        elif ad in ('축', '도메인', '멤버'):
+            row['구분'] = 'DOMAIN'
+        else:
+            row['구분'] = 'LINEITEM'
+
+
 # ── taxonomy_xlsx_parser.TaxonomyXlsxData 호환 클래스 ────────────────────────
 
 class XBRLData:
@@ -617,6 +632,7 @@ def parse_xbrl_zip(file_bytes: bytes) -> XBRLData:
 
         _add_axis_group_fields(rows)
         _postprocess_table_name(rows)
+        _remap_gubn_alteryx(rows)
 
         data.presentation_rows = rows
         data.elements          = elements
