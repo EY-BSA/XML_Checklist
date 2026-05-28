@@ -638,7 +638,9 @@ def _c3_1(rows, data):
 
         key2 = str(matched['KEY']) if matched is not None else None
 
-        if key2 is None or key_val != str(key2):
+        # key2가 None이면 레퍼런스에 없는 표준 멤버 → OK (비교 대상 없음)
+        # key2가 있는데 key_val과 다르면 → CHECK (부분 매칭됐으나 정확히 일치 안 함)
+        if key2 is not None and key_val != key2:
             status = 'CHECK'
         else:
             status = 'OK'

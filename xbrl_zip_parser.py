@@ -149,11 +149,11 @@ def _add_axis_group_fields(rows: list) -> None:
             else:
                 axis_name = name if axis_domain == '축' else prev_axis_name
 
-            # Axis = Axis
+            # Axis = Axis-Axis (레퍼런스 KEY 형식과 일치)
             # Domain = Axis-Domain
             # Member = Axis-Member
             if axis_domain == '축':
-                key = axis_name or None
+                key = f"{axis_name}-{axis_name}" if axis_name else None
             elif axis_domain == '도메인':
                 key = f"{axis_name}-{name}" if axis_name else None
             elif axis_domain == '멤버':
