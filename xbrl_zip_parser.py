@@ -108,22 +108,113 @@ def _classify_gubn(name: str) -> str:
     return 'LINEITEM'
 
 
-def _add_axis_group_fields(rows: list) -> None:
-    """3-1, 3-2 체크용 축-도메인 그룹핑 필드 추가 (taxonomy_xlsx_parser 와 동일 로직)"""
+def _parse_def_linkbase(path: str) -> dict[str, dict[str, set[str]]]:
+    """
+    Definition linkbase(_def.xml) 파싱.
+
+    Returns
+    -------
+    def_map : {table_name → {axis_name → set[member_names]}}
+      - table_name : hypercube 이름 (예: 'DisclosureOfRelatedPartyRelationshipsTable')
+      - axis_name  : dimension 이름 (예: 'CategoriesOfRelatedPartiesAxis')
+      - members    : domain + 모든 하위 member 이름 집합
+
+    role_uri는 키에서 제외 — presentation의 role_uri와 def.xml의 sub-role이
+    달라서 매칭이 불가능하므로, table_name 기준으로 집계합니다.
+    """
+    tree = ET.parse(path)
+    root = tree.getroot()
+
+    ARCROLE_HC_DIM  = 'http://xbrl.org/int/dim/arcrole/hypercube-dimension'
+    ARCROLE_DIM_DOM = 'http://xbrl.org/int/dim/arcrole/dimension-domain'
+    ARCROLE_DOM_MEM = 'http://xbrl.org/int/dim/arcrole/domain-member'
+
+    # table_name → axis_name → set[member_names]
+    def_map: dict[str, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
+
+    for dl in root.iter(f"{{{NS['link']}}}definitionLink"):
+        # locator label → concept_name
+        locs: dict[str, str] = {}
+        for loc in dl.findall(f"{{{NS['link']}}}loc"):
+            lbl  = loc.get(XLINK_LABEL, '')
+            href = loc.get(XLINK_HREF, '')
+            cid  = href.split('#', 1)[1] if '#' in href else href
+            name = cid.split('_', 1)[1]  if '_' in cid  else cid
+            locs[lbl] = name
+
+        hc_dim:  list[tuple[str, str]] = []
+        dim_dom: list[tuple[str, str]] = []
+        dom_mem: list[tuple[str, str]] = []
+
+        for arc in dl.findall(f"{{{NS['link']}}}definitionArc"):
+            arcrole = arc.attrib.get(
+                '{http://www.w3.org/1999/xlink}arcrole',
+                arc.attrib.get('arcrole', ''))
+            frm = locs.get(arc.get(XLINK_FROM, ''), '')
+            to  = locs.get(arc.get(XLINK_TO,   ''), '')
+            if not frm or not to:
+                continue
+            if arcrole == ARCROLE_HC_DIM:
+                hc_dim.append((frm, to))
+            elif arcrole == ARCROLE_DIM_DOM:
+                dim_dom.append((frm, to))
+            elif arcrole == ARCROLE_DOM_MEM:
+                dom_mem.append((frm, to))
+
+        if not hc_dim:
+            continue
+
+        axis_to_dom: dict[str, str] = {ax: dom for ax, dom in dim_dom}
+
+        children: dict[str, list[str]] = defaultdict(list)
+        for par, ch in dom_mem:
+            children[par].append(ch)
+
+        def collect_members(start: str) -> set[str]:
+            seen: set[str] = set()
+            stack = [start]
+            while stack:
+                node = stack.pop()
+                if node in seen:
+                    continue
+                seen.add(node)
+                stack.extend(children.get(node, []))
+            return seen
+
+        for tbl, ax in hc_dim:
+            dom = axis_to_dom.get(ax, '')
+            members = collect_members(dom) if dom else set()
+            def_map[tbl][ax].update(members)
+
+    return {tbl: dict(axes) for tbl, axes in def_map.items()}
+
+
+def _add_axis_group_fields(rows: list,
+                           def_map: dict | None = None) -> None:
+    """3-1, 3-2 체크용 축-도메인 그룹핑 필드 추가.
+
+    def_map : _parse_def_linkbase() 결과
+              {role_uri → {table_name → {axis_name → set[member_names]}}}
+              있으면 def.xml 기반 멤버 필터, 없으면 Presentation에 있는 멤버 전부 포함.
+    """
     groups: dict[str, list] = defaultdict(list)
     for i, row in enumerate(rows):
         groups[row.get('role_uri', '')].append((i, row))
 
     for _, indexed_rows in groups.items():
-        prev_element     = None
-        prev_axis_domain = None
-        prev_group_id    = None
-        prev_axis_name   = None
-        role_group_counter = 0  # role 내 Axis 등장 횟수 (non-Axis 요소로 리셋 안 됨)
+        prev_element       = None
+        prev_axis_domain   = None
+        prev_group_id      = None
+        prev_axis_name     = None
+        role_group_counter = 0
+        current_table_name = ''
 
         for _, (orig_idx, row) in enumerate(indexed_rows):
             element = row.get('Element', '')
             name    = row.get('Name', '')
+
+            if element == 'Table':
+                current_table_name = name
 
             if prev_element == 'Axis' and element in ('Member', 'Domain'):
                 axis_domain = '도메인'
@@ -151,23 +242,30 @@ def _add_axis_group_fields(rows: list) -> None:
             else:
                 axis_name = prev_axis_name
 
-            # Axis = Axis-Axis (레퍼런스 KEY 형식과 일치)
-            # Domain = Axis-Domain
-            # Member = Axis-Member
-            if axis_domain == '축':
+            # ── 멤버 포함 여부: def.xml에 해당 table-axis가 정의된 경우에만 필터 ──
+            store_axis_domain = axis_domain
+            store_group_id    = group_id
+            if axis_domain == '멤버' and def_map is not None:
+                tbl_axes = def_map.get(current_table_name, {})
+                if tbl_axes:  # def.xml에 이 table이 있으면
+                    axis_members = tbl_axes.get(axis_name) if axis_name else None
+                    if axis_members is not None and name not in axis_members:
+                        store_axis_domain = None
+                        store_group_id    = None
+
+            # KEY 생성
+            if store_axis_domain == '축':
                 key = f"{axis_name}-{axis_name}" if axis_name else None
-            elif axis_domain == '도메인':
-                key = f"{axis_name}-{name}" if axis_name else None
-            elif axis_domain == '멤버':
+            elif store_axis_domain in ('도메인', '멤버'):
                 key = f"{axis_name}-{name}" if axis_name else None
             else:
                 key = None
 
             rows[orig_idx].update({
-                '축_도메인': axis_domain,
+                '축_도메인': store_axis_domain,
                 'Axis_flag': axis_flag,
                 'Axis_Name': axis_name,
-                'GroupID':   group_id,
+                'GroupID':   store_group_id,
                 'KEY_axis':  key,
             })
 
@@ -617,6 +715,7 @@ def parse_xbrl_zip(file_bytes: bytes) -> XBRLData:
         data.entity_id = Path(xsd_path).stem
 
         # 회사명 / 회계연도 / 분기: .xbrl 인스턴스에서 추출
+        xbrl_path: str | None = None
         try:
             xbrl_path = _find(tmp_dir, ".xbrl")
             data.company_name = _extract_company_name(xbrl_path)
@@ -632,7 +731,15 @@ def parse_xbrl_zip(file_bytes: bytes) -> XBRLData:
             pre_path, labels_ko, labels_en, role_def_map, concept_map
         )
 
-        _add_axis_group_fields(rows)
+        # def.xml 기반 멤버 필터링
+        def_map: dict | None = None
+        try:
+            def_path = _find(tmp_dir, "_def.xml")
+            def_map  = _parse_def_linkbase(def_path)
+        except Exception:
+            pass
+
+        _add_axis_group_fields(rows, def_map)
         _postprocess_table_name(rows)
         _remap_gubn_alteryx(rows)
 
