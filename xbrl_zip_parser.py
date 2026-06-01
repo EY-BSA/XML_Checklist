@@ -119,6 +119,7 @@ def _add_axis_group_fields(rows: list) -> None:
         prev_axis_domain = None
         prev_group_id    = None
         prev_axis_name   = None
+        role_group_counter = 0  # role 내 Axis 등장 횟수 (non-Axis 요소로 리셋 안 됨)
 
         for _, (orig_idx, row) in enumerate(indexed_rows):
             element = row.get('Element', '')
@@ -138,16 +139,17 @@ def _add_axis_group_fields(rows: list) -> None:
             if axis_domain is None:
                 group_id = None
             elif axis_flag == 1:
-                group_id = 1 if prev_group_id is None else prev_group_id + 1
+                role_group_counter += 1
+                group_id = role_group_counter
             else:
                 group_id = prev_group_id
 
             if axis_domain is None:
                 axis_name = None
-            elif prev_group_id is None or group_id != prev_group_id:
-                axis_name = name if axis_domain == '축' else ''
+            elif axis_flag == 1:
+                axis_name = name
             else:
-                axis_name = name if axis_domain == '축' else prev_axis_name
+                axis_name = prev_axis_name
 
             # Axis = Axis-Axis (레퍼런스 KEY 형식과 일치)
             # Domain = Axis-Domain
