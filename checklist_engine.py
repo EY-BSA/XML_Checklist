@@ -1016,12 +1016,11 @@ def _c5_6(rows, data):
                   CNT_불필요=('CNT_단위표시불필요', 'sum'))
              .reset_index())
 
-    # Step 5 & 6: CNT_숫자 == 0 → 단위미표시 → TABLE 행 기준으로 _mk() 사용
-    미표시 = grp[grp['CNT_숫자'] == 0]
+    # Step 5 & 6: 전체 그룹 출력 — CNT_숫자==0이면 "단위미표시", 아니면 "단위표시"
     table_rows_df = df[df['구분'] == 'TABLE']
 
-    for _, row in 미표시.iterrows():
-        # 해당 그룹의 TABLE 행을 찾아 _mk() 기준 행으로 사용
+    for _, row in grp.iterrows():
+        label = '단위미표시' if row['CNT_숫자'] == 0 else '단위표시'
         match = table_rows_df[
             (table_rows_df['role_uri'] == row['role_uri']) &
             (table_rows_df['table_name_ko'] == row['table_name_ko'])
@@ -1029,11 +1028,10 @@ def _c5_6(rows, data):
         if not match.empty:
             base_row = _clean(match.iloc[0].to_dict())
         else:
-            # TABLE 행이 없으면 그룹 내 첫 번째 행 사용
             first = df[df['role_uri'] == row['role_uri']]
             base_row = _clean(first.iloc[0].to_dict()) if not first.empty else {}
 
-        r.issues.append(_mk(base_row, '단위미표시 — 해당 표에 monetaryItemType 요소 없음', data))
+        r.issues.append(_mk(base_row, label, data))
     return r
 
 

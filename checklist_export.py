@@ -127,7 +127,7 @@ def export_checklist(results: OrderedDict, template_path: str, out_path: str) ->
             if chk_id == '5-6':
                 ws.cell(ri, 2, _role_def(iss))
                 ws.cell(ri, 3, _tbl_name(iss))
-                ws.cell(ri, 4, '단위미표시')
+                ws.cell(ri, 4, iss.reason)
             elif chk_id == '7-1':
                 _write_std(ws, ri, iss)
                 ws.cell(ri, 11, iss.dart_negate)
