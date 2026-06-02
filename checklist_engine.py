@@ -618,38 +618,24 @@ def _c2_6(rows, data):
 
 def _c3_1(rows, data):
     """3-1: Axis & Domain & Member 정합성 검토
-    Alteryx 로직 (FindReplace):
-      Find Within Field: axis_domain_rows[KEY_axis]
-      Find Value:        Axis_Domain_Check[KEY]  (Any Part of Field)
-      → KEY 매칭 결과를 KEY2로 붙여 불일치 검출
+    비확장 행의 KEY_axis가 Axis_Domain_Check의 KEY에 없으면 이슈로 추출.
     """
     r = CheckResult('3-1', 'Axis & Domain & Member 정합성 검토',
-        'axis_domain_rows의 KEY 값이 Axis_Domain_Check의 KEY와 일치하지 않는 경우 검출합니다.',
+        '비확장 axis_domain_rows의 KEY 값이 Axis_Domain_Check에 없는 경우 검출합니다.',
         '축-멤버 정합성 검토', 'Checklist_3-1')
 
+    ref_keys = set(axis_check_keys)
+
     for row in rows:
+        if row.get('확장여부') == '확장':
+            continue
+
         key_val = str(row.get('KEY_axis') or '')
+        if not key_val:
+            continue
 
-        matched = None
-        for ref_key, ref in zip(axis_check_keys, axis_check_records):
-            if ref_key and ref_key in key_val:
-                matched = ref
-                break
-
-        key2 = str(matched['KEY']) if matched is not None else None
-
-        # key2가 None이면 레퍼런스에 없는 표준 멤버 → OK (비교 대상 없음)
-        # key2가 있는데 key_val과 다르면 → CHECK (부분 매칭됐으나 정확히 일치 안 함)
-        if key2 is not None and key_val != key2:
-            status = 'CHECK'
-        else:
-            status = 'OK'
-
-        if (status == 'CHECK'
-                and row.get('확장여부') != '확장'
-                and row.get('구분') == 'DOMAIN'):
-            r.issues.append(_mk(row,
-                f'KEY: {key_val} / KEY2: {key2} — 축-멤버 구조 검토 필요', data))
+        if key_val not in ref_keys:
+            r.issues.append(_mk(row, f'KEY: {key_val} — Axis_Domain_Check에 없음', data))
 
     return r
 
