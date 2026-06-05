@@ -108,19 +108,29 @@ def _classify_gubn(name: str) -> str:
     return 'LINEITEM'
 
 
-def _parse_def_linkbase(path: str) -> dict[str, dict[str, set[str]]]:
+_ROLE_CODE_RE = re.compile(r'([A-Z]{1,3}X?\d{4,})[a-z]*$')
+
+
+def _role_code_from_uri(role_uri: str) -> str:
+    """def.xml sub-role URI에서 base role_code 추출.
+    예) '.../dart_2024-06-30_role-D827585d' → 'D827585'
+    """
+    segment = role_uri.split('/')[-1]
+    m = _ROLE_CODE_RE.search(segment)
+    return m.group(1) if m else ''
+
+
+def _parse_def_linkbase(path: str) -> dict[str, dict[str, dict[str, set[str]]]]:
     """
     Definition linkbase(_def.xml) 파싱.
 
     Returns
     -------
-    def_map : {table_name → {axis_name → set[member_names]}}
-      - table_name : hypercube 이름 (예: 'DisclosureOfRelatedPartyRelationshipsTable')
-      - axis_name  : dimension 이름 (예: 'CategoriesOfRelatedPartiesAxis')
+    def_map : {role_code → {table_name → {axis_name → set[member_names]}}}
+      - role_code  : sub-role URI에서 추출한 base code (예: 'D827585')
+      - table_name : hypercube 이름
+      - axis_name  : dimension 이름
       - members    : domain + 모든 하위 member 이름 집합
-
-    role_uri는 키에서 제외 — presentation의 role_uri와 def.xml의 sub-role이
-    달라서 매칭이 불가능하므로, table_name 기준으로 집계합니다.
     """
     tree = ET.parse(path)
     root = tree.getroot()
@@ -129,11 +139,15 @@ def _parse_def_linkbase(path: str) -> dict[str, dict[str, set[str]]]:
     ARCROLE_DIM_DOM = 'http://xbrl.org/int/dim/arcrole/dimension-domain'
     ARCROLE_DOM_MEM = 'http://xbrl.org/int/dim/arcrole/domain-member'
 
-    # table_name → axis_name → set[member_names]
-    def_map: dict[str, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
+    # role_code → table_name → axis_name → set[member_names]
+    def_map: dict[str, dict[str, dict[str, set[str]]]] = defaultdict(
+        lambda: defaultdict(lambda: defaultdict(set))
+    )
 
     for dl in root.iter(f"{{{NS['link']}}}definitionLink"):
-        # locator label → concept_name
+        role_uri  = dl.get(XLINK_ROLE, '')
+        role_code = _role_code_from_uri(role_uri)
+
         locs: dict[str, str] = {}
         for loc in dl.findall(f"{{{NS['link']}}}loc"):
             lbl  = loc.get(XLINK_LABEL, '')
@@ -184,9 +198,10 @@ def _parse_def_linkbase(path: str) -> dict[str, dict[str, set[str]]]:
         for tbl, ax in hc_dim:
             dom = axis_to_dom.get(ax, '')
             members = collect_members(dom) if dom else set()
-            def_map[tbl][ax].update(members)
+            def_map[role_code][tbl][ax].update(members)
 
-    return {tbl: dict(axes) for tbl, axes in def_map.items()}
+    return {rc: {tbl: dict(axes) for tbl, axes in tbls.items()}
+            for rc, tbls in def_map.items()}
 
 
 def _add_axis_group_fields(rows: list,
@@ -208,6 +223,7 @@ def _add_axis_group_fields(rows: list,
         prev_axis_name     = None
         role_group_counter = 0
         current_table_name = ''
+        role_code          = indexed_rows[0][1].get('role_code', '') if indexed_rows else ''
 
         for _, (orig_idx, row) in enumerate(indexed_rows):
             element = row.get('Element', '')
@@ -242,12 +258,12 @@ def _add_axis_group_fields(rows: list,
             else:
                 axis_name = prev_axis_name
 
-            # ── 멤버 포함 여부: def.xml에 해당 table-axis가 정의된 경우에만 필터 ──
+            # ── 멤버 포함 여부: def.xml role_code + table 기준 필터 ──
             store_axis_domain = axis_domain
             store_group_id    = group_id
             if axis_domain == '멤버' and def_map is not None:
-                tbl_axes = def_map.get(current_table_name, {})
-                if tbl_axes:  # def.xml에 이 table이 있으면
+                tbl_axes = def_map.get(role_code, {}).get(current_table_name, {})
+                if tbl_axes:  # def.xml에 이 role+table이 있으면
                     axis_members = tbl_axes.get(axis_name) if axis_name else None
                     if axis_members is not None and name not in axis_members:
                         store_axis_domain = None
