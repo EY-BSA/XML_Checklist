@@ -278,11 +278,12 @@ def _add_axis_group_fields(rows: list,
                 key = None
 
             rows[orig_idx].update({
-                '축_도메인': store_axis_domain,
-                'Axis_flag': axis_flag,
-                'Axis_Name': axis_name,
-                'GroupID':   store_group_id,
-                'KEY_axis':  key,
+                '축_도메인':       store_axis_domain,
+                'Axis_flag':      axis_flag,
+                'Axis_Name':      axis_name,
+                'GroupID':        store_group_id,
+                'KEY_axis':       key,
+                'xbrl_table_name': current_table_name,
             })
 
             prev_element     = element
@@ -761,7 +762,26 @@ def parse_xbrl_zip(file_bytes: bytes) -> XBRLData:
 
         data.presentation_rows = rows
         data.elements          = elements
-        data.axis_domain_rows  = [r for r in rows if r.get('GroupID') is not None]
+
+        # GroupID가 있는 행만 추출
+        # (role_uri, xbrl_table_name, Axis_Name, Name) 기준 중복 제거
+        # → 같은 XBRL table이 Presentation에 두 번 나타나는 경우 방지
+        seen: set[tuple] = set()
+        axis_domain: list[dict] = []
+        for r in rows:
+            if r.get('GroupID') is None:
+                continue
+            dedup_key = (
+                r.get('role_uri', ''),
+                r.get('xbrl_table_name', ''),
+                r.get('Axis_Name', ''),
+                r.get('Name', ''),
+            )
+            if dedup_key in seen:
+                continue
+            seen.add(dedup_key)
+            axis_domain.append(r)
+        data.axis_domain_rows = axis_domain
 
     except Exception as e:
         data.errors.append(str(e))
