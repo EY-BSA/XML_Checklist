@@ -83,10 +83,12 @@ xbrl_zip_parser.py
     ▼  [후처리]
     ├── Element/구분 분류: Axis 직하 자식 → Domain으로 강제 분류
     ├── table_name_ko 채우기: TABLE 전파 → Abstract/Explanatory 역소급 → role명 채우기
-    └── 축-도메인 그룹 키 생성 (KEY_axis, GroupID 등)
+    ├── 축-도메인 그룹 키 생성 (KEY_axis, GroupID 등)
+    └── 구분(gubn) 최종 분류: domainItemType/Axis → DOMAIN, Table → TABLE,
+        TextBlock/Abstract → FOOTNOTES, 나머지 → LINEITEM
     │
     ▼
-checklist_engine.py  (28개 항목 검증)
+checklist_engine.py  (28개 항목 검증, Name이 'Abstract'로 끝나는 항목은 결과에서 제외)
     │
     ▼
 checklist_export.py
@@ -131,8 +133,6 @@ FY{연도}_{분기}_XBRL_Checklist_Result_{회사명}_{날짜시분초}.xlsx
 | 6-2 | 멤버 합계열 확장 검토 |
 | 6-3 | Duration / Instant 속성 검토 |
 | 7-1 | Client Negate 검토 |
-
-> 7-2 (현금흐름표 영업활동 현금흐름 검토)는 미구현 상태입니다.
 
 ---
 
