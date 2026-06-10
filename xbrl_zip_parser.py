@@ -292,17 +292,27 @@ def _add_axis_group_fields(rows: list,
             prev_axis_name   = axis_name
 
 
-def _remap_gubn_alteryx(rows: list) -> None:
-    """Alteryx 원본 3-value 구분 체계로 재분류.
-    TABLE → 'TABLE', Axis·Domain·Member → 'DOMAIN', 나머지 → 'LINEITEM'
+def _remap_gubn(rows: list) -> None:
+    """최종 구분(gubn) 재분류.
+    - DataType이 domainItemType → DOMAIN
+    - Name이 'Axis'로 끝남 → DOMAIN
+    - Name이 'Table'로 끝남 → TABLE
+    - Name이 'TextBlock' 또는 'Abstract'로 끝남 → FOOTNOTES
+    - 나머지 → LINEITEM
     """
     for row in rows:
-        ad = row.get('축_도메인')
-        g  = row.get('구분', '')
-        if g == 'TABLE':
-            row['구분'] = 'TABLE'
-        elif ad in ('축', '도메인', '멤버'):
+        name  = row.get('Name', '')
+        dtype = row.get('DataType', '')
+        dtype = dtype.split(':')[-1] if ':' in dtype else dtype
+
+        if dtype == 'domainItemType':
             row['구분'] = 'DOMAIN'
+        elif name.endswith('Axis'):
+            row['구분'] = 'DOMAIN'
+        elif name.endswith('Table'):
+            row['구분'] = 'TABLE'
+        elif name.endswith('TextBlock') or name.endswith('Abstract'):
+            row['구분'] = 'FOOTNOTES'
         else:
             row['구분'] = 'LINEITEM'
 
@@ -758,7 +768,7 @@ def parse_xbrl_zip(file_bytes: bytes) -> XBRLData:
 
         _add_axis_group_fields(rows, def_map)
         _postprocess_table_name(rows)
-        _remap_gubn_alteryx(rows)
+        _remap_gubn(rows)
 
         data.presentation_rows = rows
         data.elements          = elements
