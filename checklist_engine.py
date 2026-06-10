@@ -270,9 +270,15 @@ def _clean(row_dict: dict) -> dict:
     return result
 
 
+def _exclude_abstract(result: CheckResult) -> CheckResult:
+    """결과 issues 중 Name이 'Abstract'로 끝나는 항목은 결과물에서 제외 (원본 데이터는 유지)."""
+    result.issues = [i for i in result.issues if not i.element_name.endswith('Abstract')]
+    return result
+
+
 def run_all_checks(data, std=None) -> OrderedDict:
     rows = data.presentation_rows
-    return OrderedDict([
+    results = OrderedDict([
         ('1-1', _c1_1(rows, data)),
         ('1-2', _c1_2(rows, data)),
         ('1-3', _c1_3(rows, data)),
@@ -303,6 +309,11 @@ def run_all_checks(data, std=None) -> OrderedDict:
         ('7-1', _c7_1(rows, data)),   # Negate (0511: pandas 기반)
         # ('7-2', _c7_2(rows, data)),   # CF 영업활동 (미구현)
     ])
+
+    for chk in results.values():
+        _exclude_abstract(chk)
+
+    return results
 
 
 # ═════════════════════════════════════════════════════════════════════════════
