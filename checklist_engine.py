@@ -271,8 +271,12 @@ def _clean(row_dict: dict) -> dict:
 
 
 def _exclude_abstract(result: CheckResult) -> CheckResult:
-    """결과 issues 중 Name이 'Abstract'로 끝나는 항목은 결과물에서 제외 (원본 데이터는 유지)."""
-    result.issues = [i for i in result.issues if not i.element_name.endswith('Abstract')]
+    """결과 issues 중 구분이 FOOTNOTES이거나 Name이 'Abstract'/'TextBlock'으로 끝나거나 'Footnote'로 시작하는 항목 제외."""
+    result.issues = [i for i in result.issues
+                     if i.gubn != 'FOOTNOTES'
+                     and not i.element_name.endswith('Abstract')
+                     and not i.element_name.endswith('TextBlock')
+                     and not i.element_name.startswith('Footnote')]
     return result
 
 

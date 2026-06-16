@@ -317,6 +317,32 @@ def _remap_gubn(rows: list) -> None:
             row['구분'] = 'LINEITEM'
 
 
+def _remove_entity_boilerplate(rows: list) -> list:
+    """entity 커스텀 표에서 def.xml상 유효하지 않은 DOMAIN 행 제거.
+
+    Presentation linkbase에는 CarryingAmount...Axis 등의 하위 멤버가
+    보일러플레이트로 모든 표에 복붙되지만, def.xml은 표마다 허용 멤버를
+    제한한다. entity 커스텀 표(Prefix='entity*')에서 축_도메인=None인
+    DOMAIN 행은 잉여 보일러플레이트이므로 제거한다.
+    """
+    # (role_uri, xbrl_table_name) → TABLE 행의 Prefix 조회 맵 구성
+    table_prefix: dict[tuple, str] = {}
+    for row in rows:
+        if row.get('Element') == 'Table':
+            key = (row.get('role_uri', ''), row.get('xbrl_table_name', ''))
+            table_prefix[key] = row.get('Prefix', '')
+
+    def _is_entity_boilerplate(row: dict) -> bool:
+        if row.get('구분') != 'DOMAIN':
+            return False
+        if row.get('축_도메인') is not None:
+            return False
+        key = (row.get('role_uri', ''), row.get('xbrl_table_name', ''))
+        return table_prefix.get(key, '').startswith('entity')
+
+    return [r for r in rows if not _is_entity_boilerplate(r)]
+
+
 # ── taxonomy_xlsx_parser.TaxonomyXlsxData 호환 클래스 ────────────────────────
 
 class XBRLData:
@@ -769,6 +795,7 @@ def parse_xbrl_zip(file_bytes: bytes) -> XBRLData:
         _add_axis_group_fields(rows, def_map)
         _postprocess_table_name(rows)
         _remap_gubn(rows)
+        rows = _remove_entity_boilerplate(rows)
 
         data.presentation_rows = rows
         data.elements          = elements
