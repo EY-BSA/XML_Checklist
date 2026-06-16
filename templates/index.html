@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>XBRL CoE 체크리스트</title>
+  <style>
+    /* ── 기본 리셋 & 변수 ───────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --brand:   #1E3A5F;
+      --accent:  #2563EB;
+      --ok:      #16A34A;
+      --warn:    #D97706;
+      --danger:  #DC2626;
+      --bg:      #F1F5F9;
+      --surface: #FFFFFF;
+      --border:  #E2E8F0;
+      --text:    #1E293B;
+      --muted:   #64748B;
+      --radius:  8px;
+    }
+    body {
+      font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    /* ── 헤더 ───────────────────────────────────────────────────────────── */
+    header {
+      background: var(--brand);
+      color: #fff;
+      padding: 0 32px;
+      height: 56px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      box-shadow: 0 2px 8px rgba(0,0,0,.25);
+    }
+    header .logo { font-size: 20px; font-weight: 700; letter-spacing: -.3px; }
+    header .subtitle { font-size: 13px; color: #93C5FD; margin-left: 4px; }
+
+    /* ── 메인 레이아웃 ──────────────────────────────────────────────────── */
+    main { max-width: 1280px; margin: 0 auto; padding: 32px 24px 64px; }
+
+    /* ── 업로드 섹션 ────────────────────────────────────────────────────── */
+    #upload-section { margin-bottom: 32px; }
+
+    .drop-zone {
+      border: 2px dashed #93C5FD;
+      border-radius: var(--radius);
+      background: var(--surface);
+      padding: 52px 32px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color .2s, background .2s;
+      position: relative;
+    }
+    .drop-zone.drag-over { border-color: var(--accent); background: #EFF6FF; }
+    .drop-zone input[type=file] {
+      position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
+    }
+    .drop-icon { font-size: 48px; margin-bottom: 12px; line-height: 1; }
+    .drop-title { font-size: 18px; font-weight: 600; color: var(--brand); margin-bottom: 6px; }
+    .drop-hint  { font-size: 13px; color: var(--muted); margin-bottom: 20px; }
+    .btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: var(--accent); color: #fff; border: none;
+      padding: 10px 22px; border-radius: var(--radius);
+      font-size: 14px; font-weight: 600; cursor: pointer;
+      transition: background .15s;
+      text-decoration: none;
+    }
+    .btn:hover { background: #1D4ED8; }
+    .btn:disabled { background: #94A3B8; cursor: not-allowed; }
+    .btn-outline {
+      background: transparent; color: var(--accent);
+      border: 1.5px solid var(--accent);
+    }
+    .btn-outline:hover { background: #EFF6FF; }
+
+    /* ── 파일 선택 표시 ─────────────────────────────────────────────────── */
+    #file-name-bar {
+      display: none;
+      background: #EFF6FF;
+      border: 1px solid #BFDBFE;
+      border-radius: var(--radius);
+      padding: 12px 18px;
+      margin-top: 12px;
+      font-size: 14px;
+      align-items: center;
+      gap: 12px;
+    }
+    #file-name-bar .fname { font-weight: 600; color: var(--brand); flex: 1; }
+    #file-name-bar .fsize { color: var(--muted); font-size: 12px; }
+
+    /* ── 진행 표시 ──────────────────────────────────────────────────────── */
+    #progress-bar-wrap {
+      display: none;
+      margin-top: 16px;
+      background: #E2E8F0;
+      border-radius: 999px;
+      height: 6px;
+      overflow: hidden;
+    }
+    #progress-bar-fill {
+      height: 100%;
+      background: var(--accent);
+      border-radius: 999px;
+      animation: indeterminate 1.4s ease-in-out infinite;
+    }
+    @keyframes indeterminate {
+      0%   { transform: translateX(-100%) scaleX(.5); }
+      50%  { transform: translateX(0%)    scaleX(.8); }
+      100% { transform: translateX(100%) scaleX(.5); }
+    }
+    #status-text {
+      margin-top: 10px;
+      font-size: 13px;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    /* ── 에러 배너 ──────────────────────────────────────────────────────── */
+    #error-banner {
+      display: none;
+      background: #FEF2F2;
+      border: 1px solid #FCA5A5;
+      border-radius: var(--radius);
+      padding: 14px 18px;
+      margin-top: 16px;
+      color: var(--danger);
+      font-size: 14px;
+      white-space: pre-wrap;
+    }
+
+    /* ── 결과 섹션 ──────────────────────────────────────────────────────── */
+    #result-section { display: none; }
+
+    .result-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+    .result-title { font-size: 22px; font-weight: 700; color: var(--brand); }
+    .result-meta  { font-size: 13px; color: var(--muted); }
+
+    /* ── 요약 카드 그리드 ───────────────────────────────────────────────── */
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 14px;
+      margin-bottom: 28px;
+    }
+    .summary-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 18px;
+      text-align: center;
+    }
+    .summary-card .val { font-size: 32px; font-weight: 700; line-height: 1; margin-bottom: 4px; }
+    .summary-card .lbl { font-size: 12px; color: var(--muted); }
+    .summary-card.danger .val  { color: var(--danger); }
+    .summary-card.ok    .val  { color: var(--ok); }
+    .summary-card.warn  .val  { color: var(--warn); }
+    .summary-card.blue  .val  { color: var(--accent); }
+
+    /* ── 카테고리 섹션 바 ───────────────────────────────────────────────── */
+    .cat-bar {
+      display: flex; flex-wrap: wrap; gap: 8px;
+      margin-bottom: 24px;
+    }
+    .cat-chip {
+      padding: 6px 14px; border-radius: 999px;
+      font-size: 12px; font-weight: 600; cursor: pointer;
+      border: 1.5px solid transparent;
+      transition: all .15s;
+      background: var(--surface);
+      color: var(--muted);
+      border-color: var(--border);
+    }
+    .cat-chip.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .cat-chip.has-issue { color: var(--danger); border-color: #FCA5A5; }
+    .cat-chip.has-issue.active { background: var(--danger); color: #fff; border-color: var(--danger); }
+
+    /* ── 체크 카드 ──────────────────────────────────────────────────────── */
+    .check-list { display: flex; flex-direction: column; gap: 16px; }
+    .check-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .check-card.hidden { display: none; }
+    .check-header {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 14px 18px;
+      cursor: pointer;
+      user-select: none;
+      transition: background .1s;
+    }
+    .check-header:hover { background: #F8FAFC; }
+    .check-id {
+      font-size: 11px; font-weight: 700;
+      background: var(--brand); color: #fff;
+      padding: 3px 8px; border-radius: 4px;
+      white-space: nowrap;
+    }
+    .check-title { font-size: 14px; font-weight: 600; flex: 1; }
+    .check-badge {
+      font-size: 12px; font-weight: 700;
+      padding: 3px 10px; border-radius: 999px;
+      white-space: nowrap;
+    }
+    .badge-ok     { background: #DCFCE7; color: var(--ok); }
+    .badge-warn   { background: #FEF9C3; color: #92400E; }
+    .badge-danger { background: #FEE2E2; color: var(--danger); }
+    .chevron { font-size: 16px; color: var(--muted); transition: transform .2s; }
+    .check-card.open .chevron { transform: rotate(180deg); }
+
+    .check-desc {
+      padding: 0 18px 10px;
+      font-size: 12px;
+      color: var(--muted);
+      border-top: 1px solid var(--border);
+      padding-top: 10px;
+      line-height: 1.6;
+    }
+    .check-body { display: none; padding: 0 18px 16px; }
+    .check-card.open .check-body { display: block; }
+
+    /* ── 연결/별도 탭 ───────────────────────────────────────────────────── */
+    .consol-tabs {
+      display: flex; gap: 0; margin-bottom: 12px;
+      border-bottom: 2px solid var(--border);
+    }
+    .ctab {
+      padding: 8px 18px; font-size: 13px; font-weight: 600;
+      cursor: pointer; color: var(--muted);
+      border-bottom: 2px solid transparent; margin-bottom: -2px;
+      transition: all .15s;
+    }
+    .ctab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+    /* ── 이슈 테이블 ────────────────────────────────────────────────────── */
+    .tbl-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font-size: 12px;
+    }
+    table { width: 100%; border-collapse: collapse; }
+    th {
+      background: #F8FAFC; font-weight: 600; font-size: 11px;
+      padding: 8px 10px; text-align: left;
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap; color: var(--muted);
+      position: sticky; top: 0;
+    }
+    td {
+      padding: 7px 10px;
+      border-bottom: 1px solid #F1F5F9;
+      vertical-align: top;
+      max-width: 320px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: #F8FAFC; }
+    .no-issues {
+      padding: 24px; text-align: center;
+      color: var(--ok); font-weight: 600; font-size: 14px;
+    }
+    .tag-consol {
+      display: inline-block; padding: 1px 6px; border-radius: 4px;
+      font-size: 10px; font-weight: 600; margin-right: 4px;
+      background: #DBEAFE; color: #1E40AF;
+    }
+    .tag-sep {
+      display: inline-block; padding: 1px 6px; border-radius: 4px;
+      font-size: 10px; font-weight: 600; margin-right: 4px;
+      background: #F3E8FF; color: #6D28D9;
+    }
+
+    /* ── 5-6 전용 (단위표시) ───────────────────────────────────────────── */
+    .unit-ok   { color: var(--ok);   font-weight: 600; }
+    .unit-miss { color: var(--danger); font-weight: 600; }
+
+    /* ── 새 파일 버튼 등 ────────────────────────────────────────────────── */
+    .action-row {
+      display: flex; gap: 10px; flex-wrap: wrap;
+      margin-bottom: 20px;
+    }
+
+    /* ── 반응형 ─────────────────────────────────────────────────────────── */
+    @media (max-width: 600px) {
+      main { padding: 16px 12px 48px; }
+      .summary-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+  </style>
+</head>
+<body>
+<header>
+  <div class="logo">XBRL CoE 체크리스트</div>
+  <div class="subtitle">DART 원문 XBRL ZIP 검증 시스템</div>
+</header>
+
+<main>
+  <!-- ── 업로드 영역 ──────────────────────────────────────────── -->
+  <section id="upload-section">
+    <div class="drop-zone" id="drop-zone">
+      <input type="file" id="file-input" accept=".zip" />
+      <div class="drop-icon">📂</div>
+      <div class="drop-title">여기에 XBRL ZIP 파일을 드래그하세요</div>
+      <div class="drop-hint">또는 버튼을 눌러 파일을 선택하세요 (.zip)</div>
+      <button class="btn" type="button" onclick="document.getElementById('file-input').click()">
+        파일 선택
+      </button>
+    </div>
+
+    <div id="file-name-bar">
+      <span>📄</span>
+      <span class="fname" id="selected-fname"></span>
+      <span class="fsize" id="selected-fsize"></span>
+      <button class="btn" id="run-btn" onclick="runCheck()">체크리스트 실행</button>
+    </div>
+
+    <div id="progress-bar-wrap"><div id="progress-bar-fill"></div></div>
+    <div id="status-text"></div>
+    <div id="error-banner"></div>
+  </section>
+
+  <!-- ── 결과 영역 ────────────────────────────────────────────── -->
+  <section id="result-section">
+    <div class="result-header">
+      <div>
+        <div class="result-title" id="res-title"></div>
+        <div class="result-meta" id="res-meta"></div>
+      </div>
+      <div class="action-row">
+        <button class="btn btn-outline" onclick="resetApp()">⬅ 새 파일</button>
+        <button class="btn" id="export-btn" onclick="exportXlsx()">⬇ XLSX 다운로드</button>
+      </div>
+    </div>
+
+    <!-- 요약 카드 -->
+    <div class="summary-grid" id="summary-grid"></div>
+
+    <!-- 카테고리 필터 -->
+    <div class="cat-bar" id="cat-bar"></div>
+
+    <!-- 체크 카드 목록 -->
+    <div class="check-list" id="check-list"></div>
+  </section>
+</main>
+
+<script>
+/* ── 상태 ──────────────────────────────────────────────────────── */
+let _selectedFile = null;
+let _lastResults  = null;
+let _activeFilter = 'ALL';
+
+/* ── 파일 선택 / 드래그앤드롭 ──────────────────────────────────── */
+const dropZone  = document.getElementById('drop-zone');
+const fileInput = document.getElementById('file-input');
+
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  const files = e.dataTransfer.files;
+  if (files.length) handleFile(files[0]);
+});
+fileInput.addEventListener('change', () => { if (fileInput.files[0]) handleFile(fileInput.files[0]); });
+
+function handleFile(file) {
+  if (!file.name.toLowerCase().endsWith('.zip')) {
+    showError('.zip 파일만 업로드할 수 있습니다.');
+    return;
+  }
+  _selectedFile = file;
+  hideError();
+  document.getElementById('selected-fname').textContent = file.name;
+  document.getElementById('selected-fsize').textContent = formatSize(file.size);
+  document.getElementById('file-name-bar').style.display = 'flex';
+}
+
+function formatSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+/* ── 체크리스트 실행 ────────────────────────────────────────────── */
+async function runCheck() {
+  if (!_selectedFile) return;
+  setLoading(true, '분석 중…');
+  hideError();
+
+  const fd = new FormData();
+  fd.append('file', _selectedFile);
+
+  try {
+    const res = await fetch('/api/check', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok || data.error) { showError(data.error || '서버 오류'); setLoading(false); return; }
+    _lastResults = { file: _selectedFile, data };
+    renderResults(data);
+    document.getElementById('result-section').style.display = 'block';
+    document.getElementById('upload-section').style.display = 'none';
+  } catch (e) {
+    showError('네트워크 오류: ' + e.message);
+  } finally {
+    setLoading(false);
+  }
+}
+
+/* ── XLSX 다운로드 ──────────────────────────────────────────────── */
+async function exportXlsx() {
+  if (!_selectedFile) return;
+  const btn = document.getElementById('export-btn');
+  btn.disabled = true;
+  btn.textContent = '생성 중…';
+
+  const fd = new FormData();
+  fd.append('file', _selectedFile);
+
+  try {
+    const res = await fetch('/api/export', { method: 'POST', body: fd });
+    if (!res.ok) { const d = await res.json(); showError(d.error || 'XLSX 생성 오류'); return; }
+    const blob = await res.blob();
+    const cd = res.headers.get('Content-Disposition') || '';
+    const m  = cd.match(/filename\*?=(?:UTF-8'')?([^;]+)/i);
+    const fname = m ? decodeURIComponent(m[1].replace(/"/g,'')) : 'checklist_result.xlsx';
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = fname; a.click();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    showError('XLSX 다운로드 오류: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '⬇ XLSX 다운로드';
+  }
+}
+
+/* ── 결과 렌더링 ────────────────────────────────────────────────── */
+function renderResults(data) {
+  const sum = data.summary;
+
+  /* 제목 */
+  const parts = [data.company];
+  if (data.fy)     parts.push(data.fy);
+  if (data.period) parts.push(data.period);
+  document.getElementById('res-title').textContent = parts.join(' · ') + ' 체크리스트 결과';
+  document.getElementById('res-meta').textContent  = `파일: ${data.filename}`;
+
+  /* 요약 카드 */
+  const cards = [
+    { val: sum.total_checks,       lbl: '총 체크 항목',   cls: 'blue' },
+    { val: sum.checks_with_issues, lbl: '이슈 발생 항목', cls: sum.checks_with_issues ? 'danger' : 'ok' },
+    { val: sum.total_checks - sum.checks_with_issues, lbl: '이상 없는 항목', cls: 'ok' },
+    { val: sum.total_issues,       lbl: '총 이슈 건수',   cls: sum.total_issues ? 'warn' : 'ok' },
+  ];
+  document.getElementById('summary-grid').innerHTML = cards.map(c =>
+    `<div class="summary-card ${c.cls}"><div class="val">${c.val}</div><div class="lbl">${c.lbl}</div></div>`
+  ).join('');
+
+  /* 카테고리 필터 */
+  const cats = Object.keys(sum.categories);
+  const catBar = document.getElementById('cat-bar');
+  catBar.innerHTML = `<div class="cat-chip active" data-cat="ALL" onclick="filterCat('ALL',this)">전체 (${data.checks.length})</div>` +
+    cats.map(cat => {
+      const ci = sum.categories[cat];
+      const hasIssue = ci.total_issues > 0;
+      return `<div class="cat-chip${hasIssue ? ' has-issue' : ''}" data-cat="${cat}" onclick="filterCat('${escHtml(cat)}',this)">${escHtml(cat)} (${ci.checks.length})</div>`;
+    }).join('');
+
+  /* 체크 카드 목록 */
+  const list = document.getElementById('check-list');
+  list.innerHTML = data.checks.map(chk => renderCheckCard(chk)).join('');
+}
+
+function renderCheckCard(chk) {
+  const badgeCls = chk.passed ? 'badge-ok' : (chk.issue_count < 5 ? 'badge-warn' : 'badge-danger');
+  const badgeTxt = chk.passed ? '✓ 이상없음' : `⚠ ${chk.issue_count}건`;
+
+  let bodyHtml = '';
+  if (!chk.passed) {
+    if (chk.id === '5-6') {
+      bodyHtml = render56Table(chk);
+    } else if (chk.id === '7-1') {
+      bodyHtml = render71Table(chk);
+    } else {
+      bodyHtml = renderStdTable(chk);
+    }
+  } else {
+    bodyHtml = `<div class="no-issues">✓ 이슈가 없습니다.</div>`;
+  }
+
+  return `
+<div class="check-card" id="card-${chk.id}" data-cat="${escHtml(chk.category)}">
+  <div class="check-header" onclick="toggleCard('${chk.id}')">
+    <span class="check-id">${chk.id}</span>
+    <span class="check-title">${escHtml(chk.title)}</span>
+    <span class="check-badge ${badgeCls}">${badgeTxt}</span>
+    <span class="chevron">▾</span>
+  </div>
+  <div class="check-desc">${escHtml(chk.description)}</div>
+  <div class="check-body">${bodyHtml}</div>
+</div>`;
+}
+
+function renderStdTable(chk) {
+  const consolIssues = chk.issues.filter(i => i.is_consol === true);
+  const sepIssues    = chk.issues.filter(i => i.is_consol === false);
+  const etcIssues    = chk.issues.filter(i => i.is_consol === null || i.is_consol === undefined);
+  const hasBoth = consolIssues.length > 0 && sepIssues.length > 0;
+
+  if (!hasBoth) {
+    return `<div class="tbl-wrap">${stdTableInner(chk.issues)}</div>`;
+  }
+
+  const tid = 'tabs-' + chk.id;
+  return `
+<div class="consol-tabs" id="${tid}">
+  <div class="ctab active" onclick="switchTab('${tid}','consol')">연결 (${consolIssues.length})</div>
+  <div class="ctab"         onclick="switchTab('${tid}','sep')">별도 (${sepIssues.length})</div>
+  ${etcIssues.length ? `<div class="ctab" onclick="switchTab('${tid}','etc')">기타 (${etcIssues.length})</div>` : ''}
+</div>
+<div id="${tid}-consol" class="tbl-wrap">${stdTableInner(consolIssues)}</div>
+<div id="${tid}-sep"    class="tbl-wrap" style="display:none">${stdTableInner(sepIssues)}</div>
+${etcIssues.length ? `<div id="${tid}-etc" class="tbl-wrap" style="display:none">${stdTableInner(etcIssues)}</div>` : ''}`;
+}
+
+function stdTableInner(issues) {
+  const head = `<tr>
+    <th>#</th><th>표 분류</th><th>표명</th><th>Prefix</th>
+    <th>Element</th><th>Label(KO)</th><th>Label(EN)</th>
+    <th>Label Role</th><th>DataType</th><th>Period</th><th>사유</th>
+  </tr>`;
+  const rows = issues.slice(0, 500).map((iss, i) => {
+    const tag = iss.is_consol === true ? '<span class="tag-consol">연결</span>'
+              : iss.is_consol === false ? '<span class="tag-sep">별도</span>' : '';
+    return `<tr>
+      <td>${i+1}</td>
+      <td style="max-width:200px;white-space:normal">${tag}${escHtml(iss.role_def)}</td>
+      <td style="max-width:160px;white-space:normal">${escHtml(iss.table_name)}</td>
+      <td>${escHtml(iss.prefix)}</td>
+      <td>${escHtml(iss.element)}</td>
+      <td>${escHtml(iss.label_ko)}</td>
+      <td>${escHtml(iss.label_en)}</td>
+      <td>${escHtml(iss.label_role)}</td>
+      <td>${escHtml(iss.data_type)}</td>
+      <td>${escHtml(iss.period)}</td>
+      <td style="max-width:220px;white-space:normal;color:var(--danger)">${escHtml(iss.reason)}</td>
+    </tr>`;
+  }).join('');
+  return `<table><thead>${head}</thead><tbody>${rows}</tbody></table>`;
+}
+
+function render56Table(chk) {
+  const head = `<tr><th>#</th><th>표 분류</th><th>표명</th><th>단위표시 여부</th></tr>`;
+  const rows = chk.issues.slice(0, 500).map((iss, i) => {
+    const cls = iss.reason === '단위표시' ? 'unit-ok' : 'unit-miss';
+    return `<tr>
+      <td>${i+1}</td>
+      <td style="max-width:220px;white-space:normal">${escHtml(iss.role_def)}</td>
+      <td style="max-width:160px;white-space:normal">${escHtml(iss.table_name)}</td>
+      <td class="${cls}">${escHtml(iss.reason)}</td>
+    </tr>`;
+  }).join('');
+  return `<div class="tbl-wrap"><table><thead>${head}</thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function render71Table(chk) {
+  const head = `<tr>
+    <th>#</th><th>표 분류</th><th>표명</th><th>Prefix</th>
+    <th>Element</th><th>Label(KO)</th><th>Label(EN)</th>
+    <th>Label Role</th><th>DataType</th><th>Period</th>
+    <th>DART Negate</th><th>Client Negate</th>
+  </tr>`;
+  const rows = chk.issues.slice(0, 500).map((iss, i) => {
+    const tag = iss.is_consol === true ? '<span class="tag-consol">연결</span>'
+              : iss.is_consol === false ? '<span class="tag-sep">별도</span>' : '';
+    return `<tr>
+      <td>${i+1}</td>
+      <td style="max-width:200px;white-space:normal">${tag}${escHtml(iss.role_def)}</td>
+      <td style="max-width:140px;white-space:normal">${escHtml(iss.table_name)}</td>
+      <td>${escHtml(iss.prefix)}</td>
+      <td>${escHtml(iss.element)}</td>
+      <td>${escHtml(iss.label_ko)}</td>
+      <td>${escHtml(iss.label_en)}</td>
+      <td>${escHtml(iss.label_role)}</td>
+      <td>${escHtml(iss.data_type)}</td>
+      <td>${escHtml(iss.period)}</td>
+      <td>${escHtml(iss.dart_negate)}</td>
+      <td style="color:var(--danger);font-weight:600">${escHtml(iss.client_negate)}</td>
+    </tr>`;
+  }).join('');
+  return `<div class="tbl-wrap"><table><thead>${head}</thead><tbody>${rows}</tbody></table></div>`;
+}
+
+/* ── 인터랙션 ────────────────────────────────────────────────────── */
+function toggleCard(id) {
+  document.getElementById('card-' + id).classList.toggle('open');
+}
+
+function switchTab(tid, which) {
+  const container = document.getElementById(tid).parentElement;
+  container.querySelectorAll('.tbl-wrap').forEach(el => el.style.display = 'none');
+  container.querySelectorAll('.ctab').forEach(el => el.classList.remove('active'));
+  document.getElementById(tid + '-' + which).style.display = 'block';
+  container.querySelectorAll('.ctab').forEach(el => {
+    if (el.textContent.toLowerCase().includes(which === 'consol' ? '연결' : which === 'sep' ? '별도' : '기타'))
+      el.classList.add('active');
+  });
+}
+
+function filterCat(cat, el) {
+  _activeFilter = cat;
+  document.querySelectorAll('.cat-chip').forEach(c => c.classList.remove('active'));
+  el.classList.add('active');
+  document.querySelectorAll('.check-card').forEach(card => {
+    const c = card.getAttribute('data-cat');
+    card.classList.toggle('hidden', cat !== 'ALL' && c !== cat);
+  });
+}
+
+function resetApp() {
+  _selectedFile = null;
+  _lastResults  = null;
+  _activeFilter = 'ALL';
+  document.getElementById('upload-section').style.display = 'block';
+  document.getElementById('result-section').style.display = 'none';
+  document.getElementById('file-name-bar').style.display = 'none';
+  document.getElementById('file-input').value = '';
+  document.getElementById('check-list').innerHTML = '';
+  document.getElementById('summary-grid').innerHTML = '';
+  hideError();
+}
+
+/* ── 유틸 ──────────────────────────────────────────────────────── */
+function setLoading(on, msg) {
+  document.getElementById('progress-bar-wrap').style.display = on ? 'block' : 'none';
+  document.getElementById('status-text').textContent = on ? msg : '';
+  document.getElementById('run-btn').disabled = on;
+}
+function showError(msg)  { const b = document.getElementById('error-banner'); b.textContent = msg; b.style.display = 'block'; }
+function hideError()     { document.getElementById('error-banner').style.display = 'none'; }
+function escHtml(s)      { if (!s && s !== 0) return ''; return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+</script>
+</body>
+</html>
