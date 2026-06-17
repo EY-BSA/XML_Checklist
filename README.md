@@ -88,7 +88,7 @@ xbrl_zip_parser.py
         TextBlock/Abstract → FOOTNOTES, 나머지 → LINEITEM
     │
     ▼
-checklist_engine.py  (28개 항목 검증, Name이 'Abstract'로 끝나는 항목은 결과에서 제외)
+checklist_engine.py  (28개 항목 검증, 구분이 FOOTNOTES이거나 Name이 'Abstract'/'TextBlock'으로 끝나는 항목은 결과에서 제외)
     │
     ▼
 checklist_export.py
