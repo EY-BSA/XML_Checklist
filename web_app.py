@@ -24,26 +24,19 @@ app.config['MAX_CONTENT_LENGTH'] = 200 * 1024 * 1024  # 200 MB
 _DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
 _TEMPLATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'template', 'XBRL_CoE_Checklist_Result.xlsx')
 
-_std: StandardTaxonomy | None = None
-_std_lock = threading.Lock()
+def _load_std() -> StandardTaxonomy:
+    std = StandardTaxonomy()
+    axis_path   = os.path.join(_DATA_DIR, 'Axis_Domain_Check.xlsx')
+    negate_path = os.path.join(_DATA_DIR, 'DART_Negate_Check.xlsx')
+    if os.path.exists(axis_path):
+        enrich_axis_domain_check(std, axis_path)
+    if os.path.exists(negate_path):
+        enrich_dart_negate_check(std, negate_path)
+    return std
 
 
-def _get_std() -> StandardTaxonomy:
-    global _std
-    with _std_lock:
-        if _std is None:
-            _std = StandardTaxonomy()
-            axis_path   = os.path.join(_DATA_DIR, 'Axis_Domain_Check.xlsx')
-            negate_path = os.path.join(_DATA_DIR, 'DART_Negate_Check.xlsx')
-            if os.path.exists(axis_path):
-                enrich_axis_domain_check(_std, axis_path)
-            if os.path.exists(negate_path):
-                enrich_dart_negate_check(_std, negate_path)
-    return _std
-
-
-# gunicorn 으로 실행될 때도 표준 택사노미를 미리 로드 (첫 요청 타임아웃 방지)
-threading.Thread(target=_get_std, daemon=True).start()
+# 모듈 로드 시점에 한 번만 동기 로딩 (gunicorn worker 시작 전 완료)
+_STD = _load_std()
 
 
 def _issue_to_dict(iss, chk_id: str) -> dict:
@@ -89,7 +82,7 @@ def api_check():
     if data.errors:
         return jsonify({'error': '\n'.join(data.errors)}), 400
 
-    std = _get_std()
+    std = _STD
     results = run_all_checks(data, std)
     summary = get_summary(results)
 
@@ -140,7 +133,7 @@ def api_export():
     if data.errors:
         return jsonify({'error': '\n'.join(data.errors)}), 400
 
-    std = _get_std()
+    std = _STD
     results = run_all_checks(data, std)
 
     company   = data.company_name or (data.entity_id or 'XBRL').split('_')[0]
@@ -172,5 +165,4 @@ def api_export():
 
 
 if __name__ == '__main__':
-    threading.Thread(target=_get_std, daemon=True).start()
     app.run(debug=False, host='0.0.0.0', port=8080)
