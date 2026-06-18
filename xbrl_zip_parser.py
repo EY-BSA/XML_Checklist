@@ -311,7 +311,7 @@ def _remap_gubn(rows: list) -> None:
             row['구분'] = 'DOMAIN'
         elif name.endswith('Table'):
             row['구분'] = 'TABLE'
-        elif name.endswith('TextBlock') or name.endswith('Abstract'):
+        elif name.endswith('TextBlock') or name.endswith('Abstract') or name.endswith('Text') or name.endswith('Textbox'):
             row['구분'] = 'FOOTNOTES'
         else:
             row['구분'] = 'LINEITEM'
