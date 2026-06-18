@@ -21,6 +21,9 @@ from checklist_export import export_checklist
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 200 * 1024 * 1024  # 200 MB
 
+# gunicorn 으로 실행될 때도 표준 택사노미를 미리 로드 (첫 요청 타임아웃 방지)
+threading.Thread(target=_get_std, daemon=True).start()
+
 _DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
 _TEMPLATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'template', 'XBRL_CoE_Checklist_Result.xlsx')
 
