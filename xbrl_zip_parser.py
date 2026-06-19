@@ -120,35 +120,33 @@ def _role_code_from_uri(role_uri: str) -> str:
     return m.group(1) if m else ''
 
 
-def _parse_def_linkbase(path: str) -> dict[str, dict[str, dict[str, set[str]]]]:
+def _parse_def_linkbase(path: str):
     """
     Definition linkbase(_def.xml) 파싱.
 
     Returns
     -------
     def_map : {role_code → {table_name → {axis_name → set[member_names]}}}
-      - role_code  : sub-role URI에서 추출한 base code (예: 'D827585')
-      - table_name : hypercube 이름
-      - axis_name  : dimension 이름
-      - members    : domain + 모든 하위 member 이름 집합
+    lineitem_map : {role_code → {table_name → set[lineitem_names]}}
+      - all arcrole(lineitem_abstract → table)와 domain-member 순회로 구성
+      - 비어있는 경우(all arcrole 없음) → 해당 표 LINEITEM 필터링 안 함
     """
     tree = ET.parse(path)
     root = tree.getroot()
 
+    ARCROLE_ALL     = 'http://xbrl.org/int/dim/arcrole/all'
     ARCROLE_HC_DIM  = 'http://xbrl.org/int/dim/arcrole/hypercube-dimension'
     ARCROLE_DIM_DOM = 'http://xbrl.org/int/dim/arcrole/dimension-domain'
     ARCROLE_DOM_MEM = 'http://xbrl.org/int/dim/arcrole/domain-member'
 
-    # role_code → table_name → axis_name → set[member_names]
-    def_map: dict[str, dict[str, dict[str, set[str]]]] = defaultdict(
-        lambda: defaultdict(lambda: defaultdict(set))
-    )
+    def_map      = defaultdict(lambda: defaultdict(lambda: defaultdict(set)))
+    lineitem_map = defaultdict(lambda: defaultdict(set))
 
     for dl in root.iter(f"{{{NS['link']}}}definitionLink"):
         role_uri  = dl.get(XLINK_ROLE, '')
         role_code = _role_code_from_uri(role_uri)
 
-        locs: dict[str, str] = {}
+        locs = {}
         for loc in dl.findall(f"{{{NS['link']}}}loc"):
             lbl  = loc.get(XLINK_LABEL, '')
             href = loc.get(XLINK_HREF, '')
@@ -156,9 +154,10 @@ def _parse_def_linkbase(path: str) -> dict[str, dict[str, dict[str, set[str]]]]:
             name = cid.split('_', 1)[1]  if '_' in cid  else cid
             locs[lbl] = name
 
-        hc_dim:  list[tuple[str, str]] = []
-        dim_dom: list[tuple[str, str]] = []
-        dom_mem: list[tuple[str, str]] = []
+        hc_dim  = []
+        dim_dom = []
+        dom_mem = []
+        all_arc = []
 
         for arc in dl.findall(f"{{{NS['link']}}}definitionArc"):
             arcrole = arc.attrib.get(
@@ -168,25 +167,26 @@ def _parse_def_linkbase(path: str) -> dict[str, dict[str, dict[str, set[str]]]]:
             to  = locs.get(arc.get(XLINK_TO,   ''), '')
             if not frm or not to:
                 continue
-            if arcrole == ARCROLE_HC_DIM:
+            if arcrole == ARCROLE_ALL:
+                all_arc.append((frm, to))
+            elif arcrole == ARCROLE_HC_DIM:
                 hc_dim.append((frm, to))
             elif arcrole == ARCROLE_DIM_DOM:
                 dim_dom.append((frm, to))
             elif arcrole == ARCROLE_DOM_MEM:
                 dom_mem.append((frm, to))
 
-        if not hc_dim:
+        if not hc_dim and not all_arc:
             continue
 
-        axis_to_dom: dict[str, str] = {ax: dom for ax, dom in dim_dom}
+        axis_to_dom = {ax: dom for ax, dom in dim_dom}
 
-        children: dict[str, list[str]] = defaultdict(list)
+        children = defaultdict(list)
         for par, ch in dom_mem:
             children[par].append(ch)
 
-        def collect_members(start: str) -> set[str]:
-            seen: set[str] = set()
-            stack = [start]
+        def collect(start):
+            seen, stack = set(), [start]
             while stack:
                 node = stack.pop()
                 if node in seen:
@@ -195,13 +195,20 @@ def _parse_def_linkbase(path: str) -> dict[str, dict[str, dict[str, set[str]]]]:
                 stack.extend(children.get(node, []))
             return seen
 
+        # 축-멤버 맵 (기존)
         for tbl, ax in hc_dim:
-            dom = axis_to_dom.get(ax, '')
-            members = collect_members(dom) if dom else set()
+            dom     = axis_to_dom.get(ax, '')
+            members = collect(dom) if dom else set()
             def_map[role_code][tbl][ax].update(members)
 
-    return {rc: {tbl: dict(axes) for tbl, axes in tbls.items()}
-            for rc, tbls in def_map.items()}
+        # LINEITEM 맵 (신규): all arcrole abstract → table
+        for abstract, tbl in all_arc:
+            lineitem_map[role_code][tbl].update(collect(abstract))
+
+    def_map_out = {rc: {tbl: dict(axes) for tbl, axes in tbls.items()}
+                   for rc, tbls in def_map.items()}
+    lineitem_map_out = {rc: dict(tbls) for rc, tbls in lineitem_map.items()}
+    return def_map_out, lineitem_map_out
 
 
 def _add_axis_group_fields(rows: list,
@@ -317,15 +324,31 @@ def _remap_gubn(rows: list) -> None:
             row['구분'] = 'LINEITEM'
 
 
-def _remove_def_invalid_rows(rows: list) -> list:
-    """def.xml에 등록되지 않은 DOMAIN 행 제거.
+def _remove_def_invalid_rows(rows: list, lineitem_map=None) -> list:
+    """def.xml에 등록되지 않은 DOMAIN/LINEITEM 행 제거.
 
-    Presentation linkbase에는 멤버가 보일러플레이트로 여러 표에 복붙되지만,
-    def.xml은 표마다 허용 멤버를 제한한다. 구분=DOMAIN이면서 축_도메인=None인
-    행은 def.xml 기준으로 해당 표에서 유효하지 않으므로 prefix에 무관하게 제거한다.
+    [DOMAIN] 구분=DOMAIN이면서 축_도메인=None → def.xml 미등록 보일러플레이트.
+
+    [LINEITEM] lineitem_map(_parse_def_linkbase 반환값)이 있을 때,
+    해당 표(role_code + xbrl_table_name)의 유효 LINEITEM 집합이 정의되어 있고
+    현재 행의 Name이 그 집합에 없으면 보일러플레이트로 제거한다.
+    유효 집합이 없는 표(all arcrole 미정의)는 필터링하지 않는다.
     """
-    return [r for r in rows
-            if not (r.get('구분') == 'DOMAIN' and r.get('축_도메인') is None)]
+    def _is_invalid(row):
+        # DOMAIN 보일러플레이트
+        if row.get('구분') == 'DOMAIN' and row.get('축_도메인') is None:
+            return True
+        # LINEITEM 보일러플레이트
+        if lineitem_map and row.get('구분') == 'LINEITEM':
+            role_code     = row.get('role_code', '')
+            current_table = row.get('xbrl_table_name', '')
+            if role_code and current_table:
+                valid = lineitem_map.get(role_code, {}).get(current_table)
+                if valid and row.get('Name', '') not in valid:
+                    return True
+        return False
+
+    return [r for r in rows if not _is_invalid(r)]
 
 
 # ── taxonomy_xlsx_parser.TaxonomyXlsxData 호환 클래스 ────────────────────────
@@ -770,17 +793,18 @@ def parse_xbrl_zip(file_bytes: bytes) -> XBRLData:
         )
 
         # def.xml 기반 멤버 필터링
-        def_map: dict | None = None
+        def_map      = None
+        lineitem_map = None
         try:
             def_path = _find(tmp_dir, "_def.xml")
-            def_map  = _parse_def_linkbase(def_path)
+            def_map, lineitem_map = _parse_def_linkbase(def_path)
         except Exception:
             pass
 
         _add_axis_group_fields(rows, def_map)
         _postprocess_table_name(rows)
         _remap_gubn(rows)
-        rows = _remove_def_invalid_rows(rows)
+        rows = _remove_def_invalid_rows(rows, lineitem_map)
 
         data.presentation_rows = rows
         data.elements          = elements
