@@ -305,12 +305,18 @@ def _remap_gubn(rows: list) -> None:
     - Name이 'Axis'로 끝남 → DOMAIN
     - Name이 'Table'로 끝남 → TABLE
     - Name이 'TextBlock' 또는 'Abstract'로 끝남 → FOOTNOTES
+    - entity 확장 stringItemType이면서, 자신의 depth가 같은 role 내 직전에
+      등장한 TABLE의 depth보다 얕음(= Abstract/Table 구조의 형제로 붙은
+      글주석이며 실제로는 그 표 소속이 아님) → FOOTNOTES
     - 나머지 → LINEITEM
     """
+    last_table_depth_by_role: dict[str, int] = {}
+
     for row in rows:
         name  = row.get('Name', '')
         dtype = row.get('DataType', '')
         dtype = dtype.split(':')[-1] if ':' in dtype else dtype
+        role  = row.get('role_uri', '')
 
         if dtype == 'domainItemType':
             row['구분'] = 'DOMAIN'
@@ -318,7 +324,13 @@ def _remap_gubn(rows: list) -> None:
             row['구분'] = 'DOMAIN'
         elif name.endswith('Table'):
             row['구분'] = 'TABLE'
+            last_table_depth_by_role[role] = row.get('depth', 0)
         elif name.endswith('TextBlock') or name.endswith('Abstract'):
+            row['구분'] = 'FOOTNOTES'
+        elif (dtype == 'stringItemType'
+                and row.get('Prefix', '').startswith('entity')
+                and (role not in last_table_depth_by_role
+                     or row.get('depth', 0) < last_table_depth_by_role[role])):
             row['구분'] = 'FOOTNOTES'
         else:
             row['구분'] = 'LINEITEM'
