@@ -304,7 +304,10 @@ def _remap_gubn(rows: list) -> None:
     - DataType이 domainItemType → DOMAIN
     - Name이 'Axis'로 끝남 → DOMAIN
     - Name이 'Table'로 끝남 → TABLE
-    - Name이 'TextBlock' 또는 'Abstract'로 끝남 → FOOTNOTES
+    - Name이 'TextBlock'으로 끝남 → FOOTNOTES
+    - Name이 'Abstract'로 끝남 → FOOTNOTES
+      단, entity 확장 항목이면서 XSD상 abstract=False인 경우는 예외로 LINEITEM 유지.
+      (이름만 'Abstract'로 끝나는 실제 데이터 항목 — 구조(XSD abstract 속성) 기준 우선)
     - entity 확장 stringItemType이면서, 자신의 depth가 같은 role 내 직전에
       등장한 TABLE의 depth보다 얕음(= Abstract/Table 구조의 형제로 붙은
       글주석이며 실제로는 그 표 소속이 아님) → FOOTNOTES
@@ -313,10 +316,11 @@ def _remap_gubn(rows: list) -> None:
     last_table_depth_by_role: dict[str, int] = {}
 
     for row in rows:
-        name  = row.get('Name', '')
-        dtype = row.get('DataType', '')
-        dtype = dtype.split(':')[-1] if ':' in dtype else dtype
-        role  = row.get('role_uri', '')
+        name      = row.get('Name', '')
+        dtype     = row.get('DataType', '')
+        dtype     = dtype.split(':')[-1] if ':' in dtype else dtype
+        role      = row.get('role_uri', '')
+        is_entity = row.get('Prefix', '').startswith('entity')
 
         if dtype == 'domainItemType':
             row['구분'] = 'DOMAIN'
@@ -325,10 +329,15 @@ def _remap_gubn(rows: list) -> None:
         elif name.endswith('Table'):
             row['구분'] = 'TABLE'
             last_table_depth_by_role[role] = row.get('depth', 0)
-        elif name.endswith('TextBlock') or name.endswith('Abstract'):
+        elif name.endswith('TextBlock'):
             row['구분'] = 'FOOTNOTES'
+        elif name.endswith('Abstract'):
+            if is_entity and not row.get('abstract', False):
+                row['구분'] = 'LINEITEM'
+            else:
+                row['구분'] = 'FOOTNOTES'
         elif (dtype == 'stringItemType'
-                and row.get('Prefix', '').startswith('entity')
+                and is_entity
                 and (role not in last_table_depth_by_role
                      or row.get('depth', 0) < last_table_depth_by_role[role])):
             row['구분'] = 'FOOTNOTES'

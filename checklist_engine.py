@@ -271,11 +271,14 @@ def _clean(row_dict: dict) -> dict:
 
 
 def _exclude_abstract(result: CheckResult) -> CheckResult:
-    """결과 issues 중 구분이 FOOTNOTES이거나 Name이 'Abstract'/'TextBlock'으로 끝나거나 'Footnote'로 시작하는 항목 제외."""
+    """결과 issues 중 구분이 FOOTNOTES이거나 Name이 'Footnote'로 시작하는 항목 제외.
+
+    Abstract/TextBlock 여부는 xbrl_zip_parser._remap_gubn에서 구조(XSD abstract
+    속성) 기준으로 이미 구분(gubn)에 반영되어 있으므로 여기서 Name suffix로
+    다시 확인하지 않는다 (이름만 'Abstract'로 끝나는 실제 LINEITEM을 보존하기 위함).
+    """
     result.issues = [i for i in result.issues
                      if i.gubn != 'FOOTNOTES'
-                     and not i.element_name.endswith('Abstract')
-                     and not i.element_name.endswith('TextBlock')
                      and not i.element_name.startswith('Footnote')]
     return result
 
