@@ -682,7 +682,7 @@ _PERIOD_SUFFIX_MAP = {
     'HY':  '2Q',
     'TQA': '3Q', 'TQQ': '3Q',
 }
-_CTX_RE = re.compile(r'^CFY(\d{4})[de]([A-Z]+)')
+_CTX_RE = re.compile(r'^CFY(\d{4})([de])([A-Z]+)')
 
 
 def _extract_company_name(xbrl_path: str) -> str:
@@ -709,17 +709,24 @@ def _extract_period_info(xbrl_path: str) -> tuple[str, str]:
     DART 컨텍스트는 항상 회계연도 시작일부터의 누적기간이므로
     startDate 월의 전월이 결산월이다 (1월 시작 → 전년도 12월말 결산).
     """
+    fy_str = ''
+    period = ''
     try:
         for _, el in ET.iterparse(xbrl_path, events=("end",)):
             if not el.tag.endswith('}context'):
                 continue
             m = _CTX_RE.match(el.get('id', ''))
-            if m:
-                year   = m.group(1)[2:]
-                suffix = m.group(2)
+            if not m:
+                el.clear()
+                continue
+
+            year, de, suffix = m.group(1)[2:], m.group(2), m.group(3)
+            if not fy_str:
+                fy_str = f'FY{year}'
                 period = _PERIOD_SUFFIX_MAP.get(suffix, suffix)
 
-                fy_str = f'FY{year}'
+            # 'd'(duration) 컨텍스트만 startDate를 가지므로 그 경우에만 결산월 시도
+            if de == 'd' and '(' not in fy_str:
                 start_el = el.find(f".//{{{NS['xbrli']}}}startDate")
                 if start_el is not None and start_el.text:
                     try:
@@ -729,11 +736,12 @@ def _extract_period_info(xbrl_path: str) -> tuple[str, str]:
                     except (ValueError, IndexError):
                         pass
 
+            if '(' in fy_str:
                 return fy_str, period
             el.clear()
     except Exception:
         pass
-    return '', ''
+    return fy_str, period
 
 
 # ── table_name_ko 후처리 ─────────────────────────────────────────────────────
