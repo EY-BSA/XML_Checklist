@@ -308,6 +308,9 @@ def _remap_gubn(rows: list) -> None:
     - Name이 'Abstract'로 끝남 → FOOTNOTES
       단, entity 확장 항목이면서 XSD상 abstract=False인 경우는 예외로 LINEITEM 유지.
       (이름만 'Abstract'로 끝나는 실제 데이터 항목 — 구조(XSD abstract 속성) 기준 우선)
+      다만 바로 다음 행이 depth+1이면서 Name이 'Table'로 끝나는 경우(= 이 항목이
+      Table을 직속으로 감싸는 그룹핑 위치)라면 XSD abstract 속성이 잘못
+      기재됐을 가능성이 높으므로 FOOTNOTES로 유지한다.
     - entity 확장 stringItemType이면서, 자신의 depth가 같은 role 내 직전에
       등장한 TABLE의 depth보다 얕음(= Abstract/Table 구조의 형제로 붙은
       글주석이며 실제로는 그 표 소속이 아님) → FOOTNOTES
@@ -315,7 +318,7 @@ def _remap_gubn(rows: list) -> None:
     """
     last_table_depth_by_role: dict[str, int] = {}
 
-    for row in rows:
+    for idx, row in enumerate(rows):
         name      = row.get('Name', '')
         dtype     = row.get('DataType', '')
         dtype     = dtype.split(':')[-1] if ':' in dtype else dtype
@@ -332,7 +335,12 @@ def _remap_gubn(rows: list) -> None:
         elif name.endswith('TextBlock'):
             row['구분'] = 'FOOTNOTES'
         elif name.endswith('Abstract'):
-            if is_entity and not row.get('abstract', False):
+            next_row = rows[idx + 1] if idx + 1 < len(rows) else None
+            is_table_parent = (next_row is not None
+                                and next_row.get('role_uri') == role
+                                and next_row.get('depth', -1) == row.get('depth', 0) + 1
+                                and next_row.get('Name', '').endswith('Table'))
+            if is_entity and not row.get('abstract', False) and not is_table_parent:
                 row['구분'] = 'LINEITEM'
             else:
                 row['구분'] = 'FOOTNOTES'
