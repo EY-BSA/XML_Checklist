@@ -702,18 +702,34 @@ def _extract_company_name(xbrl_path: str) -> str:
 
 def _extract_period_info(xbrl_path: str) -> tuple[str, str]:
     """
-    당기(C) 컨텍스트 ID에서 회계연도·분기 추출.
-    반환: (fy, period)  예) ('FY25', '1Q') / ('FY25', 'Annual')
+    당기(C) 컨텍스트 ID에서 회계연도·분기·결산월 추출.
+    반환: (fy, period)  예) ('FY25(12)', '1Q') / ('FY25(12)', 'Annual')
+
+    결산월은 컨텍스트의 startDate(회계연도 시작일)로 역산한다.
+    DART 컨텍스트는 항상 회계연도 시작일부터의 누적기간이므로
+    startDate 월의 전월이 결산월이다 (1월 시작 → 전년도 12월말 결산).
     """
     try:
-        for _, el in ET.iterparse(xbrl_path, events=("start",)):
-            if el.tag.endswith('}context'):
-                m = _CTX_RE.match(el.get('id', ''))
-                if m:
-                    year   = m.group(1)[2:]
-                    suffix = m.group(2)
-                    period = _PERIOD_SUFFIX_MAP.get(suffix, suffix)
-                    return f'FY{year}', period
+        for _, el in ET.iterparse(xbrl_path, events=("end",)):
+            if not el.tag.endswith('}context'):
+                continue
+            m = _CTX_RE.match(el.get('id', ''))
+            if m:
+                year   = m.group(1)[2:]
+                suffix = m.group(2)
+                period = _PERIOD_SUFFIX_MAP.get(suffix, suffix)
+
+                fy_str = f'FY{year}'
+                start_el = el.find(f".//{{{NS['xbrli']}}}startDate")
+                if start_el is not None and start_el.text:
+                    try:
+                        start_month = int(start_el.text.strip()[5:7])
+                        fy_end_month = 12 if start_month == 1 else start_month - 1
+                        fy_str = f'FY{year}({fy_end_month:02d})'
+                    except (ValueError, IndexError):
+                        pass
+
+                return fy_str, period
             el.clear()
     except Exception:
         pass
