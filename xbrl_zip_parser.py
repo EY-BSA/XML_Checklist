@@ -679,7 +679,7 @@ def _parse_presentation(
 _PERIOD_SUFFIX_MAP = {
     'FY':  '4Q',
     'FQA': '1Q', 'FQQ': '1Q',
-    'HY':  '2Q',
+    'HY':  '2Q', 'HYA': '2Q', 'HYQ': '2Q',
     'TQA': '3Q', 'TQQ': '3Q',
 }
 _CTX_RE = re.compile(r'^CFY(\d{4})([de])([A-Z]+)')
