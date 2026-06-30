@@ -135,9 +135,14 @@ def _parse_def_linkbase(path: str):
     Returns
     -------
     def_map : {role_code → {table_name → {axis_name → set[member_names]}}}
+      - 표(축) 안에 어떤 멤버들이 있는지 — flat set (소속 여부만 확인 가능)
     lineitem_map : {role_code → {table_name → set[lineitem_names]}}
       - all arcrole(lineitem_abstract → table)와 domain-member 순회로 구성
       - 비어있는 경우(all arcrole 없음) → 해당 표 LINEITEM 필터링 안 함
+    def_edge_map : {role_code → {table_name → {axis_name → {child_name → {유효 parent 이름들}}}}}
+      - 각 멤버의 실제 부모-자식 edge(domain-member arc)를 보존
+      - flat set과 달리 "이 멤버가 표에 속하는가"가 아니라
+        "이 멤버가 이 부모 밑에 있는 것이 def.xml상 맞는가"를 검증할 수 있음
     """
     tree = ET.parse(path)
     root = tree.getroot()
@@ -148,6 +153,7 @@ def _parse_def_linkbase(path: str):
     ARCROLE_DOM_MEM = 'http://xbrl.org/int/dim/arcrole/domain-member'
 
     def_map      = defaultdict(lambda: defaultdict(lambda: defaultdict(set)))
+    def_edge_map = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: defaultdict(set))))
     lineitem_map = defaultdict(lambda: defaultdict(set))
 
     for dl in root.iter(f"{{{NS['link']}}}definitionLink"):
@@ -203,11 +209,22 @@ def _parse_def_linkbase(path: str):
                 stack.extend(children.get(node, []))
             return seen
 
-        # 축-멤버 맵 (기존)
+        # 축-멤버 맵 (기존, flat set) + 부모-자식 edge 맵 (신규)
         for tbl, ax in hc_dim:
-            dom     = axis_to_dom.get(ax, '')
-            members = collect(dom) if dom else set()
+            dom = axis_to_dom.get(ax, '')
+            if not dom:
+                continue
+            members = collect(dom)
             def_map[role_code][tbl][ax].update(members)
+
+            edge_map = def_edge_map[role_code][tbl][ax]
+            edge_map[dom].add(ax)  # 도메인의 부모는 축 자신
+            for parent, child in dom_mem:
+                # 이 축(dom 이하)에 실제로 속한 멤버의 edge만 기록.
+                # dom_mem에는 같은 definitionLink 안에 무관한 구조(Explanatory 등)의
+                # edge도 섞여있을 수 있어 members 집합으로 필터링한다.
+                if child in members:
+                    edge_map[child].add(parent)
 
         # LINEITEM 맵 (신규): all arcrole abstract → table
         for abstract, tbl in all_arc:
@@ -215,17 +232,29 @@ def _parse_def_linkbase(path: str):
 
     def_map_out = {rc: {tbl: dict(axes) for tbl, axes in tbls.items()}
                    for rc, tbls in def_map.items()}
+    def_edge_map_out = {
+        rc: {tbl: {ax: dict(children_) for ax, children_ in axes.items()}
+             for tbl, axes in tbls.items()}
+        for rc, tbls in def_edge_map.items()
+    }
     lineitem_map_out = {rc: dict(tbls) for rc, tbls in lineitem_map.items()}
-    return def_map_out, lineitem_map_out
+    return def_map_out, lineitem_map_out, def_edge_map_out
 
 
 def _add_axis_group_fields(rows: list,
-                           def_map: dict | None = None) -> None:
+                           def_map: dict | None = None,
+                           def_edge_map: dict | None = None) -> None:
     """3-1, 3-2 체크용 축-도메인 그룹핑 필드 추가.
 
     def_map : _parse_def_linkbase() 결과
               {role_uri → {table_name → {axis_name → set[member_names]}}}
               있으면 def.xml 기반 멤버 필터, 없으면 Presentation에 있는 멤버 전부 포함.
+    def_edge_map : _parse_def_linkbase() 결과
+              {role_uri → {table_name → {axis_name → {child → {유효 parent들}}}}}
+              멤버가 표에 속하는지(set 포함)뿐 아니라, presentation상 실제 부모가
+              def.xml이 정의한 부모와 일치하는지까지 검증한다. 같은 멤버가 여러
+              하위구조(Member→SubMember)에 걸쳐 재사용될 때 엉뚱한 부모 밑에
+              붙어있는 오배치를 잡아낸다.
     """
     groups: dict[str, list] = defaultdict(list)
     for i, row in enumerate(rows):
@@ -283,6 +312,16 @@ def _add_axis_group_fields(rows: list,
                     if axis_members is not None and name not in axis_members:
                         store_axis_domain = None
                         store_group_id    = None
+                    elif def_edge_map is not None and axis_name:
+                        # 표 소속(set)은 맞아도, 실제 부모가 def.xml이 정의한
+                        # 부모와 다르면 오배치(다른 하위구조에서 복붙된 멤버)
+                        valid_parents = (def_edge_map.get(role_code, {})
+                                                      .get(current_table_name, {})
+                                                      .get(axis_name, {})
+                                                      .get(name))
+                        if valid_parents and row.get('parent') not in valid_parents:
+                            store_axis_domain = None
+                            store_group_id    = None
 
             # KEY 생성
             if store_axis_domain == '축':
@@ -856,13 +895,14 @@ def parse_xbrl_zip(file_bytes: bytes) -> XBRLData:
         # def.xml 기반 멤버 필터링
         def_map      = None
         lineitem_map = None
+        def_edge_map = None
         try:
             def_path = _find(tmp_dir, "_def.xml")
-            def_map, lineitem_map = _parse_def_linkbase(def_path)
+            def_map, lineitem_map, def_edge_map = _parse_def_linkbase(def_path)
         except Exception:
             pass
 
-        _add_axis_group_fields(rows, def_map)
+        _add_axis_group_fields(rows, def_map, def_edge_map)
         _postprocess_table_name(rows)
         _remap_gubn(rows)
         rows = _remove_def_invalid_rows(rows, lineitem_map)
