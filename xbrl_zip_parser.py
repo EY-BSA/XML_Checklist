@@ -83,16 +83,24 @@ def _label_role_short(url: str) -> str:
 
 
 def _classify_element(name: str) -> str:
-    suffix = name[-4:].lower() if len(name) >= 4 else ''
-    element = {
-        'tory': 'Explanatory',
-        'ract': 'Abstract',
-        'axis': 'Axis',
-        'lock': 'TextBlock',
-        'able': 'Table',
-        'mber': 'Member',
-        'main': 'Domain',
-    }.get(suffix, 'item')
+    # 끝 4글자 대신 전체 단어로 비교 (예: '...Variable'/'...Number'/'...Contract'/
+    # '...Inventory'가 'able'/'mber'/'ract'/'tory' 4글자만 보고 오매칭되는 것 방지)
+    if name.endswith('Explanatory'):
+        element = 'Explanatory'
+    elif name.endswith('Abstract'):
+        element = 'Abstract'
+    elif name.endswith('Axis'):
+        element = 'Axis'
+    elif name.endswith('TextBlock'):
+        element = 'TextBlock'
+    elif name.endswith('Table'):
+        element = 'Table'
+    elif name.endswith('Member'):
+        element = 'Member'
+    elif name.endswith('Domain'):
+        element = 'Domain'
+    else:
+        element = 'item'
     if 'lineitem' in name.lower():
         element = 'Lineitem'
     return element
