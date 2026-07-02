@@ -218,13 +218,10 @@ def _parse_def_linkbase(path: str):
             def_map[role_code][tbl][ax].update(members)
 
             edge_map = def_edge_map[role_code][tbl][ax]
-            edge_map[dom].add(ax)  # 도메인의 부모는 축 자신
+            edge_map[ax].add(dom)   # 축 → 도메인
             for parent, child in dom_mem:
-                # 이 축(dom 이하)에 실제로 속한 멤버의 edge만 기록.
-                # dom_mem에는 같은 definitionLink 안에 무관한 구조(Explanatory 등)의
-                # edge도 섞여있을 수 있어 members 집합으로 필터링한다.
-                if child in members:
-                    edge_map[child].add(parent)
+                if parent in members and child in members:
+                    edge_map[parent].add(child)
 
         # LINEITEM 맵 (신규): all arcrole abstract → table
         for abstract, tbl in all_arc:
@@ -233,7 +230,8 @@ def _parse_def_linkbase(path: str):
     def_map_out = {rc: {tbl: dict(axes) for tbl, axes in tbls.items()}
                    for rc, tbls in def_map.items()}
     def_edge_map_out = {
-        rc: {tbl: {ax: dict(children_) for ax, children_ in axes.items()}
+        rc: {tbl: {ax: {par: set(chs) for par, chs in edges.items()}
+                   for ax, edges in axes.items()}
              for tbl, axes in tbls.items()}
         for rc, tbls in def_edge_map.items()
     }
@@ -242,40 +240,50 @@ def _parse_def_linkbase(path: str):
 
 
 def _add_axis_group_fields(rows: list,
-                           def_map: dict | None = None,
-                           def_edge_map: dict | None = None) -> None:
+                           def_map: dict | None = None) -> None:
     """3-1, 3-2 체크용 축-도메인 그룹핑 필드 추가.
 
-    def_map : _parse_def_linkbase() 결과
-              {role_uri → {table_name → {axis_name → set[member_names]}}}
-              있으면 def.xml 기반 멤버 필터, 없으면 Presentation에 있는 멤버 전부 포함.
-    def_edge_map : _parse_def_linkbase() 결과
-              {role_uri → {table_name → {axis_name → {child → {유효 parent들}}}}}
-              멤버가 표에 속하는지(set 포함)뿐 아니라, presentation상 실제 부모가
-              def.xml이 정의한 부모와 일치하는지까지 검증한다. 같은 멤버가 여러
-              하위구조(Member→SubMember)에 걸쳐 재사용될 때 엉뚱한 부모 밑에
-              붙어있는 오배치를 잡아낸다.
+    def_map 있으면 표 진입 시 member→axis 역방향 인덱스를 구성하고,
+    Member/Domain 행의 Axis_Name을 presentation 순서가 아닌 def.xml 기반으로
+    결정한다. 여러 축이 있는 표에서 멤버가 다른 축 블록 뒤에 나타나도 정확히
+    귀속된다. axis_to_group 딕셔너리로 축별 GroupID도 정확히 배정.
+
+    def_map : {role_uri → {table_name → {axis_name → set[member_names]}}}
+    def_edge_map : {role_uri → {table_name → {axis_name → {child → {유효 parent들}}}}}
     """
     groups: dict[str, list] = defaultdict(list)
     for i, row in enumerate(rows):
         groups[row.get('role_uri', '')].append((i, row))
 
     for _, indexed_rows in groups.items():
-        prev_element       = None
-        prev_axis_domain   = None
-        prev_group_id      = None
-        prev_axis_name     = None
+        if not indexed_rows:
+            continue
+        role_code          = indexed_rows[0][1].get('role_code', '')
         role_group_counter = 0
         current_table_name = ''
-        role_code          = indexed_rows[0][1].get('role_code', '') if indexed_rows else ''
+        axis_to_group: dict[str, int]        = {}  # axis_name → group_id
+        mem_to_axes:   dict[str, list[str]]  = {}  # member_name → [axis_name, ...]
 
-        for _, (orig_idx, row) in enumerate(indexed_rows):
+        prev_element     = None
+        prev_axis_domain = None
+        prev_group_id    = None
+        prev_axis_name   = None
+
+        for orig_idx, row in indexed_rows:
             element = row.get('Element', '')
             name    = row.get('Name', '')
 
+            # 새 표 진입 → def_map 기반 역방향 인덱스 재구성
             if element == 'Table':
                 current_table_name = name
+                axis_to_group = {}
+                mem_to_axes   = {}
+                if def_map is not None:
+                    for ax, members in def_map.get(role_code, {}).get(current_table_name, {}).items():
+                        for m in members:
+                            mem_to_axes.setdefault(m, []).append(ax)
 
+            # axis_domain: presentation 순서 기반 (도메인/멤버 계층 시각 구조)
             if prev_element == 'Axis' and element in ('Member', 'Domain'):
                 axis_domain = '도메인'
             elif element == 'Axis':
@@ -287,41 +295,42 @@ def _add_axis_group_fields(rows: list,
 
             axis_flag = 1 if axis_domain == '축' else 0
 
+            # axis_name: def_map 역방향 인덱스로 결정 (다중 축 정확성)
+            if element == 'Axis':
+                axis_name = name
+            elif axis_domain in ('도메인', '멤버'):
+                candidates = mem_to_axes.get(name, [])
+                if len(candidates) == 1:
+                    axis_name = candidates[0]
+                elif prev_axis_name in candidates:
+                    axis_name = prev_axis_name  # 현재 축 유지 (ambiguous)
+                elif candidates:
+                    axis_name = candidates[0]
+                else:
+                    axis_name = prev_axis_name  # def_map 미등록 → presentation fallback
+            else:
+                axis_name = None
+
+            # group_id: axis_to_group 딕셔너리로 축별 배정
             if axis_domain is None:
                 group_id = None
-            elif axis_flag == 1:
+            elif element == 'Axis':
                 role_group_counter += 1
                 group_id = role_group_counter
+                axis_to_group[name] = group_id
             else:
-                group_id = prev_group_id
+                group_id = axis_to_group.get(axis_name, prev_group_id) if axis_name else prev_group_id
 
-            if axis_domain is None:
-                axis_name = None
-            elif axis_flag == 1:
-                axis_name = name
-            else:
-                axis_name = prev_axis_name
-
-            # ── 멤버 포함 여부: def.xml role_code + table 기준 필터 ──
+            # ── def.xml 유효성 검증: 소속 여부 + 부모 검증 ──
             store_axis_domain = axis_domain
             store_group_id    = group_id
             if axis_domain == '멤버' and def_map is not None:
                 tbl_axes = def_map.get(role_code, {}).get(current_table_name, {})
-                if tbl_axes:  # def.xml에 이 role+table이 있으면
+                if tbl_axes:
                     axis_members = tbl_axes.get(axis_name) if axis_name else None
                     if axis_members is not None and name not in axis_members:
                         store_axis_domain = None
                         store_group_id    = None
-                    elif def_edge_map is not None and axis_name:
-                        # 표 소속(set)은 맞아도, 실제 부모가 def.xml이 정의한
-                        # 부모와 다르면 오배치(다른 하위구조에서 복붙된 멤버)
-                        valid_parents = (def_edge_map.get(role_code, {})
-                                                      .get(current_table_name, {})
-                                                      .get(axis_name, {})
-                                                      .get(name))
-                        if valid_parents and row.get('parent') not in valid_parents:
-                            store_axis_domain = None
-                            store_group_id    = None
 
             # KEY 생성
             if store_axis_domain == '축':
@@ -332,11 +341,11 @@ def _add_axis_group_fields(rows: list,
                 key = None
 
             rows[orig_idx].update({
-                '축_도메인':       store_axis_domain,
-                'Axis_flag':      axis_flag,
-                'Axis_Name':      axis_name,
-                'GroupID':        store_group_id,
-                'KEY_axis':       key,
+                '축_도메인':        store_axis_domain,
+                'Axis_flag':       axis_flag,
+                'Axis_Name':       axis_name,
+                'GroupID':         store_group_id,
+                'KEY_axis':        key,
                 'xbrl_table_name': current_table_name,
             })
 
@@ -574,6 +583,8 @@ def _parse_presentation(
     labels_en:   dict[str, dict[str, str]],
     role_def_map: dict[str, str],
     concept_map: dict[str, dict],
+    def_map:      dict | None = None,
+    def_edge_map: dict | None = None,
 ) -> tuple[list[dict], dict[str, object]]:
     tree = ET.parse(path)
     root = tree.getroot()
@@ -705,8 +716,46 @@ def _parse_presentation(
                 'table_name_ko':   current_table_name_ko,
             }
 
+        def _concept_name_from_loc(loc_label: str) -> str:
+            cid = loc_to_id.get(loc_label, "")
+            concept = concept_map.get(cid, {})
+            return concept.get("name") or (cid.split("_", 1)[-1] if "_" in cid else cid)
+
+        def _concept_element_from_loc(loc_label: str) -> str:
+            return _classify_element(_concept_name_from_loc(loc_label))
+
+        def _is_valid_axis_member(table_name: str, axis_name: str, member_name: str) -> bool:
+            if not def_map or not code or not table_name or not axis_name or not member_name:
+                return True
+            tbl_axes = def_map.get(code, {}).get(table_name, {})
+            if not tbl_axes:
+                return True
+            valid_members = tbl_axes.get(axis_name)
+            if valid_members is None:
+                return True
+            return member_name in valid_members
+
+        def _is_valid_axis_child(table_name: str, axis_name: str,
+                                 parent_dim_name: str, child_name: str) -> bool:
+            if not def_edge_map or not code:
+                return True
+            if not table_name or not axis_name or not parent_dim_name or not child_name:
+                return True
+            tbl_axes = def_edge_map.get(code, {}).get(table_name, {})
+            if not tbl_axes:
+                return True
+            axis_edges = tbl_axes.get(axis_name)
+            if not axis_edges:
+                return True
+            valid_children = axis_edges.get(parent_dim_name)
+            if valid_children is None:
+                return False
+            return child_name in valid_children
+
         def dfs(loc_label: str, depth: int, order: float | None, pref_url: str,
-                par_name: str, par_lbl_ko: str, par_gubn: str) -> None:
+                par_name: str, par_lbl_ko: str, par_gubn: str,
+                current_table_name: str = "", current_axis_name: str = "",
+                current_dim_parent: str = "") -> None:
             cid = loc_to_id.get(loc_label, "")
             if order is not None:
                 order_val: Any = int(order) if float(order).is_integer() else order
@@ -715,13 +764,41 @@ def _parse_presentation(
 
             row = make_row(cid, depth, order_val, pref_url, par_name, par_lbl_ko, par_gubn)
 
-            # 연결/별도 구분용 구조 요소는 체크리스트 불필요 → 행 제외 (자식은 계속 탐색)
-            if row['Name'] not in _CONSOL_SEPARATE_NAMES:
+            row_name    = row.get('Name', '')
+            row_element = row.get('Element', '')
+
+            next_table_name = current_table_name
+            next_axis_name  = current_axis_name
+            next_dim_parent = current_dim_parent
+
+            if row_element == 'Table':
+                next_table_name = row_name
+                next_axis_name  = ''
+                next_dim_parent = ''
+            elif row_element == 'Axis':
+                next_axis_name  = row_name
+                next_dim_parent = row_name
+            elif row_element in ('Domain', 'Member') and current_axis_name:
+                next_dim_parent = row_name
+
+            if row_name not in _CONSOL_SEPARATE_NAMES:
                 rows.append(row)
 
             for to_lbl, o, p in children.get(loc_label, []):
+                child_name    = _concept_name_from_loc(to_lbl)
+                child_element = _concept_element_from_loc(to_lbl)
+
+                if next_table_name and next_axis_name and child_element in ('Domain', 'Member'):
+                    if not _is_valid_axis_member(next_table_name, next_axis_name, child_name):
+                        continue
+                    if next_dim_parent:
+                        if not _is_valid_axis_child(next_table_name, next_axis_name,
+                                                    next_dim_parent, child_name):
+                            continue
+
                 dfs(to_lbl, depth + 1, o, p,
-                    row['Name'], row['Label(KO)'], row['구분'])
+                    row['Name'], row['Label(KO)'], row['구분'],
+                    next_table_name, next_axis_name, next_dim_parent)
 
         for r in roots:
             dfs(r, 0, None, "", "", "", "")
@@ -888,11 +965,7 @@ def parse_xbrl_zip(file_bytes: bytes) -> XBRLData:
         labels_ko = _parse_labels(lab_ko_path)
         labels_en = _parse_labels(lab_en_path)
 
-        rows, elements = _parse_presentation(
-            pre_path, labels_ko, labels_en, role_def_map, concept_map
-        )
-
-        # def.xml 기반 멤버 필터링
+        # def.xml 기반 멤버 필터링 (presentation 파싱 전에 먼저 로드)
         def_map      = None
         lineitem_map = None
         def_edge_map = None
@@ -902,7 +975,12 @@ def parse_xbrl_zip(file_bytes: bytes) -> XBRLData:
         except Exception:
             pass
 
-        _add_axis_group_fields(rows, def_map, def_edge_map)
+        rows, elements = _parse_presentation(
+            pre_path, labels_ko, labels_en, role_def_map, concept_map,
+            def_map, def_edge_map
+        )
+
+        _add_axis_group_fields(rows, def_map)
         _postprocess_table_name(rows)
         _remap_gubn(rows)
         rows = _remove_def_invalid_rows(rows, lineitem_map)
