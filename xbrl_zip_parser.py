@@ -359,10 +359,10 @@ def _add_axis_group_fields(rows: list,
                         store_axis_domain = None
                         store_group_id    = None
 
-            # KEY 생성
+            # KEY 생성 ('도메인'은 Axis의 첫 번째 자식으로 참조 목록에 없으므로 제외)
             if store_axis_domain == '축':
                 key = f"{axis_name}-{axis_name}" if axis_name else None
-            elif store_axis_domain in ('도메인', '멤버'):
+            elif store_axis_domain == '멤버':
                 key = f"{axis_name}-{name}" if axis_name else None
             else:
                 key = None
