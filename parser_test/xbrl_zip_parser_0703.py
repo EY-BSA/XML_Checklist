@@ -72,9 +72,20 @@ def _extract_table_number(role_def: str) -> str:
 
 def _extract_role_code(role_def: str, role_uri: str) -> str:
     code = _extract_table_number(role_def)
-    if code: return code
+    if code:
+        return code
+
+    # 기존: URI 마지막이 /D822390 같은 경우
     m = re.search(r'/([A-Z]{1,3}X?\d{4,})$', str(role_uri))
-    return m.group(1) if m else ''
+    if m:
+        return m.group(1)
+
+    # 보강: ifrs_7_role-D822390 / ifrs_7_role-D822390p 형태
+    m = re.search(r'role-([A-Z]{1,3}X?\d{4,})(?:[a-z])?$', str(role_uri).split('/')[-1])
+    if m:
+        return m.group(1)
+
+    return ''
 
 
 def _label_role_short(url: str) -> str:
@@ -83,8 +94,8 @@ def _label_role_short(url: str) -> str:
 
 
 def _classify_element(name: str) -> str:
-    # 4글자 대신 전체 단어로 비교 (예: '...Variable'/'...Number'/'...Contract'/
-    # '...Inventory'가 'able'/'mber'/'ract'/'tory' 4글자만 보고 오매칭되는 것 방지)
+    # 끝 4글자만 보면 Variable/Number/Contract/Inventory 등이
+    # Table/Member/Abstract/Explanatory로 오분류될 수 있으므로 전체 suffix 기준으로 판단
     if name.endswith('Explanatory'):
         element = 'Explanatory'
     elif name.endswith('Abstract'):
@@ -101,29 +112,22 @@ def _classify_element(name: str) -> str:
         element = 'Domain'
     else:
         element = 'item'
-    if name.lower().endswith(('lineitem', 'lineitems')):
+    if 'lineitem' in name.lower():
         element = 'Lineitem'
     return element
 
 
-def _classify_gubn(name: str) -> str:
-    if name.endswith('Table'):                                   return 'TABLE'
-    if name.endswith('TextBlock'):                               return 'FOOTNOTES'
-    if name.endswith('Explanatory'):                             return 'FOOTNOTES'
-    if name.endswith('Axis'):                                    return 'Axis'
-    if name.endswith('Member'):                                  return 'Member'
-    if name.endswith('Domain'):                                  return 'Domain'
-    if name.endswith('LineItems') or name.endswith('LineItem'): return 'LINEITEM'
-    return 'LINEITEM'
 
 
-def _is_text_block_like_concept(name: str = '', dtype: str = '',
-                                lbl_ko: str = '', lbl_en: str = '') -> bool:
-    """이름이 Explanatory/TextBlock으로 끝나지 않아도
-    DataType 또는 Label상 [text block]/[문장영역]이면 문장영역으로 판별.
-    예: DescriptionOfManagingLiquidityRisk → Label(EN): '... [text block]'
+def _is_text_block_like_concept(name: str = '', dtype: str = '', lbl_ko: str = '', lbl_en: str = '') -> bool:
+    """XBRL 문장영역/TextBlock 성격의 concept 판별.
+
+    Name이 Explanatory/TextBlock으로 끝나지 않아도 DataType 또는 label상
+    [text block]/[문장영역]이면 문장영역으로 취급한다.
+    예: ifrs-full_DescriptionOfManagingLiquidityRisk
+        Label(EN): Disclosure of how entity manages liquidity risk [text block]
     """
-    n  = str(name  or '')
+    n = str(name or '')
     dt = str(dtype or '').split(':')[-1]
     ko = str(lbl_ko or '').lower()
     en = str(lbl_en or '').lower()
@@ -142,18 +146,29 @@ def _is_text_block_like_concept(name: str = '', dtype: str = '',
     )
     return any(marker in label_text for marker in text_block_markers)
 
+def _classify_gubn(name: str) -> str:
+    if name.endswith('Table'):                                   return 'TABLE'
+    if name.endswith('TextBlock'):                               return 'FOOTNOTES'
+    if name.endswith('Explanatory'):                             return 'FOOTNOTES'
+    if name.endswith('Axis'):                                    return 'Axis'
+    if name.endswith('Member'):                                  return 'Member'
+    if name.endswith('Domain'):                                  return 'Domain'
+    if name.endswith('LineItems') or name.endswith('LineItem'): return 'LINEITEM'
+    return 'LINEITEM'
 
-_ROLE_CODE_RE = re.compile(r'([A-Z]{1,3}X?\d{4,})[a-z]*$')
-
+_ROLE_CODE_RE = re.compile(r'([A-Z]{1,3}X?\d{4,})(?:[a-z])?$')
 
 def _role_code_from_uri(role_uri: str) -> str:
-    """def.xml sub-role URI에서 base role_code 추출.
-    예) '.../dart_2024-06-30_role-D827585d' → 'D827585'
     """
-    segment = role_uri.split('/')[-1]
-    m = _ROLE_CODE_RE.search(segment)
+    def.xml sub-role URI에서 base role_code 추출.
+    예)
+      .../ifrs_7_role-D822390   -> D822390
+      .../ifrs_7_role-D822390p  -> D822390
+      .../dart_2024-06-30_role-D827585d -> D827585
+    """
+    segment = str(role_uri).split('/')[-1]
+    m = re.search(r'role-([A-Z]{1,3}X?\d{4,})(?:[a-z])?$', segment)
     return m.group(1) if m else ''
-
 
 def _parse_def_linkbase(path: str):
     """
@@ -161,15 +176,14 @@ def _parse_def_linkbase(path: str):
 
     Returns
     -------
-    def_map : {role_code → {table_name → {axis_name → set[member_names]}}}
-      - 표(축) 안에 어떤 멤버들이 있는지 — flat set (소속 여부만 확인 가능)
-    lineitem_map : {role_code → {table_name → set[lineitem_names]}}
-      - all arcrole(lineitem_abstract → table)와 domain-member 순회로 구성
-      - 비어있는 경우(all arcrole 없음) → 해당 표 LINEITEM 필터링 안 함
-    def_edge_map : {role_code → {table_name → {axis_name → {child_name → {유효 parent 이름들}}}}}
-      - 각 멤버의 실제 부모-자식 edge(domain-member arc)를 보존
-      - flat set과 달리 "이 멤버가 표에 속하는가"가 아니라
-        "이 멤버가 이 부모 밑에 있는 것이 def.xml상 맞는가"를 검증할 수 있음
+    def_map:
+      {role_code → {table_name → {axis_name → set[member_names]}}}
+
+    lineitem_map:
+      {role_code → {table_name → set[lineitem_names]}}
+
+    def_edge_map:
+      {role_code → {table_name → {axis_name → {parent_name → set(child_names)}}}}
     """
     tree = ET.parse(path)
     root = tree.getroot()
@@ -179,20 +193,25 @@ def _parse_def_linkbase(path: str):
     ARCROLE_DIM_DOM = 'http://xbrl.org/int/dim/arcrole/dimension-domain'
     ARCROLE_DOM_MEM = 'http://xbrl.org/int/dim/arcrole/domain-member'
 
+    XBRLDT_USABLE = '{http://xbrl.org/2005/xbrldt}usable'
+
     def_map      = defaultdict(lambda: defaultdict(lambda: defaultdict(set)))
-    def_edge_map = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: defaultdict(set))))
     lineitem_map = defaultdict(lambda: defaultdict(set))
+    def_edge_map = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: defaultdict(set))))
 
     for dl in root.iter(f"{{{NS['link']}}}definitionLink"):
         role_uri  = dl.get(XLINK_ROLE, '')
         role_code = _role_code_from_uri(role_uri)
 
+        if not role_code:
+            continue
+
         locs = {}
         for loc in dl.findall(f"{{{NS['link']}}}loc"):
             lbl  = loc.get(XLINK_LABEL, '')
             href = loc.get(XLINK_HREF, '')
-            cid  = href.split('#', 1)[1] if '#' in href else href
-            name = cid.split('_', 1)[1]  if '_' in cid  else cid
+            cid  = href.split("#", 1)[1] if "#" in href else href
+            name = cid.split("_", 1)[1] if "_" in cid else cid
             locs[lbl] = name
 
         hc_dim  = []
@@ -203,11 +222,17 @@ def _parse_def_linkbase(path: str):
         for arc in dl.findall(f"{{{NS['link']}}}definitionArc"):
             arcrole = arc.attrib.get(
                 '{http://www.w3.org/1999/xlink}arcrole',
-                arc.attrib.get('arcrole', ''))
+                arc.attrib.get('arcrole', '')
+            )
+
             frm = locs.get(arc.get(XLINK_FROM, ''), '')
-            to  = locs.get(arc.get(XLINK_TO,   ''), '')
+            to  = locs.get(arc.get(XLINK_TO, ''), '')
             if not frm or not to:
                 continue
+
+            usable = arc.get(XBRLDT_USABLE, '')
+            is_usable_false = str(usable).lower() == 'false'
+
             if arcrole == ARCROLE_ALL:
                 all_arc.append((frm, to))
             elif arcrole == ARCROLE_HC_DIM:
@@ -215,7 +240,7 @@ def _parse_def_linkbase(path: str):
             elif arcrole == ARCROLE_DIM_DOM:
                 dim_dom.append((frm, to))
             elif arcrole == ARCROLE_DOM_MEM:
-                dom_mem.append((frm, to))
+                dom_mem.append((frm, to, is_usable_false))
 
         if not hc_dim and not all_arc:
             continue
@@ -223,10 +248,15 @@ def _parse_def_linkbase(path: str):
         axis_to_dom = {ax: dom for ax, dom in dim_dom}
 
         children = defaultdict(list)
-        for par, ch in dom_mem:
+        for par, ch, is_usable_false in dom_mem:
+            if is_usable_false:
+                continue
             children[par].append(ch)
 
-        def collect(start):
+        def collect(start: str) -> set[str]:
+            if not start:
+                return set()
+
             seen, stack = set(), [start]
             while stack:
                 node = stack.pop()
@@ -236,81 +266,99 @@ def _parse_def_linkbase(path: str):
                 stack.extend(children.get(node, []))
             return seen
 
-        # 축-멤버 맵 (기존, flat set) + 부모-자식 edge 맵 (신규)
+        # 축-멤버 map + 축별 edge map
         for tbl, ax in hc_dim:
             dom = axis_to_dom.get(ax, '')
-            if not dom:
-                continue
-            members = collect(dom)
-            def_map[role_code][tbl][ax].update(members)
+            axis_nodes = collect(dom) if dom else set()
 
-            edge_map = def_edge_map[role_code][tbl][ax]
-            edge_map[ax].add(dom)   # 축 → 도메인
-            for parent, child in dom_mem:
-                if parent in members and child in members:
-                    edge_map[parent].add(child)
+            def_map[role_code][tbl][ax].update(axis_nodes)
 
-        # LINEITEM 맵 (신규): all arcrole abstract → table
+            # axis -> domain edge
+            if dom:
+                def_edge_map[role_code][tbl][ax][ax].add(dom)
+
+            # 중요:
+            # 해당 axis domain subtree 내부의 edge만 저장한다.
+            # 다른 table/axis/lineitem edge를 섞으면 특수관계자처럼 멤버가 과하게 붙는다.
+            for par, child_list in children.items():
+                if par not in axis_nodes:
+                    continue
+
+                for ch in child_list:
+                    if ch in axis_nodes:
+                        def_edge_map[role_code][tbl][ax][par].add(ch)
+
+        # LINEITEM map
         for abstract, tbl in all_arc:
             lineitem_map[role_code][tbl].update(collect(abstract))
 
-    def_map_out = {rc: {tbl: dict(axes) for tbl, axes in tbls.items()}
-                   for rc, tbls in def_map.items()}
+    def_map_out = {
+        rc: {tbl: dict(axes) for tbl, axes in tbls.items()}
+        for rc, tbls in def_map.items()
+    }
+
+    lineitem_map_out = {
+        rc: dict(tbls)
+        for rc, tbls in lineitem_map.items()
+    }
+
     def_edge_map_out = {
-        rc: {tbl: {ax: {par: set(chs) for par, chs in edges.items()}
-                   for ax, edges in axes.items()}
-             for tbl, axes in tbls.items()}
+        rc: {
+            tbl: {
+                ax: {par: set(children) for par, children in edges.items()}
+                for ax, edges in axes.items()
+            }
+            for tbl, axes in tbls.items()
+        }
         for rc, tbls in def_edge_map.items()
     }
-    lineitem_map_out = {rc: dict(tbls) for rc, tbls in lineitem_map.items()}
-    return def_map_out, lineitem_map_out, def_edge_map_out
 
+    return def_map_out, lineitem_map_out, def_edge_map_out
 
 def _add_axis_group_fields(rows: list,
                            def_map: dict | None = None) -> None:
     """3-1, 3-2 체크용 축-도메인 그룹핑 필드 추가.
 
-    def_map 있으면 표 진입 시 member→axis 역방향 인덱스를 구성하고,
-    Member/Domain 행의 Axis_Name을 presentation 순서가 아닌 def.xml 기반으로
-    결정한다. 여러 축이 있는 표에서 멤버가 다른 축 블록 뒤에 나타나도 정확히
-    귀속된다. axis_to_group 딕셔너리로 축별 GroupID도 정확히 배정.
-
-    def_map : {role_uri → {table_name → {axis_name → set[member_names]}}}
-    def_edge_map : {role_uri → {table_name → {axis_name → {child → {유효 parent들}}}}}
+    def_map : _parse_def_linkbase() 결과
+              {role_uri → {table_name → {axis_name → set[member_names]}}}
+              있으면 def.xml 기반 멤버 필터, 없으면 Presentation에 있는 멤버 전부 포함.
     """
     groups: dict[str, list] = defaultdict(list)
     for i, row in enumerate(rows):
         groups[row.get('role_uri', '')].append((i, row))
 
     for _, indexed_rows in groups.items():
-        if not indexed_rows:
-            continue
-        role_code          = indexed_rows[0][1].get('role_code', '')
+        prev_element       = None
+        prev_axis_domain   = None
+        prev_group_id      = None
+        prev_axis_name     = None
         role_group_counter = 0
         current_table_name = ''
-        axis_to_group: dict[str, int]        = {}  # axis_name → group_id
-        mem_to_axes:   dict[str, list[str]]  = {}  # member_name → [axis_name, ...]
+        role_code          = indexed_rows[0][1].get('role_code', '') if indexed_rows else ''
 
-        prev_element     = None
-        prev_axis_domain = None
-        prev_group_id    = None
-        prev_axis_name   = None
-
-        for orig_idx, row in indexed_rows:
+        for _, (orig_idx, row) in enumerate(indexed_rows):
             element = row.get('Element', '')
             name    = row.get('Name', '')
 
-            # 새 표 진입 → def_map 기반 역방향 인덱스 재구성
             if element == 'Table':
                 current_table_name = name
-                axis_to_group = {}
-                mem_to_axes   = {}
-                if def_map is not None:
-                    for ax, members in def_map.get(role_code, {}).get(current_table_name, {}).items():
-                        for m in members:
-                            mem_to_axes.setdefault(m, []).append(ax)
 
-            # axis_domain: presentation 순서 기반 (도메인/멤버 계층 시각 구조)
+                # TABLE 경계에서는 축 상태 리셋
+                prev_element = element
+                prev_axis_domain = None
+                prev_group_id = None
+                prev_axis_name = None
+
+                rows[orig_idx].update({
+                    '축_도메인': None,
+                    'Axis_flag': 0,
+                    'Axis_Name': None,
+                    'GroupID': None,
+                    'KEY_axis': None,
+                    'xbrl_table_name': current_table_name,
+                })
+                continue
+
             if prev_element == 'Axis' and element in ('Member', 'Domain'):
                 axis_domain = '도메인'
             elif element == 'Axis':
@@ -322,38 +370,27 @@ def _add_axis_group_fields(rows: list,
 
             axis_flag = 1 if axis_domain == '축' else 0
 
-            # axis_name: def_map 역방향 인덱스로 결정 (다중 축 정확성)
-            if element == 'Axis':
-                axis_name = name
-            elif axis_domain in ('도메인', '멤버'):
-                candidates = mem_to_axes.get(name, [])
-                if len(candidates) == 1:
-                    axis_name = candidates[0]
-                elif prev_axis_name in candidates:
-                    axis_name = prev_axis_name  # 현재 축 유지 (ambiguous)
-                elif candidates:
-                    axis_name = candidates[0]
-                else:
-                    axis_name = prev_axis_name  # def_map 미등록 → presentation fallback
-            else:
-                axis_name = None
-
-            # group_id: axis_to_group 딕셔너리로 축별 배정
             if axis_domain is None:
                 group_id = None
-            elif element == 'Axis':
+            elif axis_flag == 1:
                 role_group_counter += 1
                 group_id = role_group_counter
-                axis_to_group[name] = group_id
             else:
-                group_id = axis_to_group.get(axis_name, prev_group_id) if axis_name else prev_group_id
+                group_id = prev_group_id
 
-            # ── def.xml 유효성 검증: 소속 여부 + 부모 검증 ──
+            if axis_domain is None:
+                axis_name = None
+            elif axis_flag == 1:
+                axis_name = name
+            else:
+                axis_name = prev_axis_name
+
+            # ── 멤버 포함 여부: def.xml role_code + table 기준 필터 ──
             store_axis_domain = axis_domain
             store_group_id    = group_id
             if axis_domain == '멤버' and def_map is not None:
                 tbl_axes = def_map.get(role_code, {}).get(current_table_name, {})
-                if tbl_axes:
+                if tbl_axes:  # def.xml에 이 role+table이 있으면
                     axis_members = tbl_axes.get(axis_name) if axis_name else None
                     if axis_members is not None and name not in axis_members:
                         store_axis_domain = None
@@ -368,11 +405,11 @@ def _add_axis_group_fields(rows: list,
                 key = None
 
             rows[orig_idx].update({
-                '축_도메인':        store_axis_domain,
-                'Axis_flag':       axis_flag,
-                'Axis_Name':       axis_name,
-                'GroupID':         store_group_id,
-                'KEY_axis':        key,
+                '축_도메인':       store_axis_domain,
+                'Axis_flag':      axis_flag,
+                'Axis_Name':      axis_name,
+                'GroupID':        store_group_id,
+                'KEY_axis':       key,
                 'xbrl_table_name': current_table_name,
             })
 
@@ -411,6 +448,7 @@ def _remap_gubn(rows: list) -> None:
         if dtype == 'domainItemType':
             row['구분'] = 'DOMAIN'
         elif _is_text_block_like_concept(name, dtype, row.get('Label(KO)', ''), row.get('Label(EN)', '')):
+            # 후처리 단계에서도 문장영역을 LINEITEM으로 되돌리지 않는다.
             row['구분'] = 'FOOTNOTES'
             if row.get('Element') == 'item':
                 row['Element'] = 'TextBlock'
@@ -439,16 +477,20 @@ def _remap_gubn(rows: list) -> None:
         else:
             row['구분'] = 'LINEITEM'
 
+def _remove_def_invalid_rows(rows: list, lineitem_map=None) -> list:
+    """def.xml에 등록되지 않은 DOMAIN/MEMBER 행 제거.
 
-def _remove_def_invalid_rows(rows: list) -> list:
-    """def.xml에 등록되지 않은 Domain/Member 행 제거.
+    주의:
+    기존 v3에서는 lineitem_map이 후단 버그로 사실상 None이 되어
+    LINEITEM 필터가 작동하지 않았다.
 
-    축_도메인=None인 Element='Domain'/'Member' 행만 제거한다.
-    Lineitem은 def.xml의 domain-member 아크가 presentation보다 얕게 정의되는 경우
-    (ex. UnappropriatedRetainedEarnings 하위 5개 항목)에 실제 유효 항목이
-    잘못 제거되므로 필터링하지 않는다.
+    lineitem_map은 def.xml의 all/domain-member 구조에 의존하는데, Presentation에서
+    Lineitem이 Abstract/소계/문장영역 하위의 다른 depth에 배치되는 경우
+    실제 유효 Lineitem이어도 lineitem_map[role_code][table]에 누락될 수 있다.
+    따라서 LINEITEM은 def.xml 기준으로 삭제하지 않고, DOMAIN/MEMBER 보일러플레이트만 정리한다.
     """
     def _is_invalid(row):
+        # DOMAIN / Member 보일러플레이트만 제거
         if row.get('축_도메인') is None and row.get('Element') in ('Domain', 'Member'):
             return True
         return False
@@ -604,7 +646,7 @@ def _parse_presentation(
     role_def_map: dict[str, str],
     concept_map: dict[str, dict],
     def_map:      dict | None = None,
-    def_edge_map: dict | None = None,
+    def_edge_map:  dict | None = None,
 ) -> tuple[list[dict], dict[str, object]]:
     tree = ET.parse(path)
     root = tree.getroot()
@@ -684,11 +726,14 @@ def _parse_presentation(
 
             gubn    = _classify_gubn(name)
             element = _classify_element(name)
-            # DataType/Label 기반 TextBlock 판별 (이름 suffix만으로 놓치는 경우 보완)
+
+            # 이름이 Explanatory/TextBlock으로 끝나지 않아도
+            # DataType 또는 Label상 [text block]/[문장영역]이면 문장영역으로 취급
             if _is_text_block_like_concept(name, dtype, lbl_ko, lbl_en):
                 gubn = 'FOOTNOTES'
                 if element == 'item':
                     element = 'TextBlock'
+
             # Axis 바로 아래 첫 번째 자식은 Domain (이름과 무관하게 위치로 강제 분류)
             if par_gubn == 'Axis':
                 gubn    = 'Domain'
@@ -745,85 +790,169 @@ def _parse_presentation(
             cid = loc_to_id.get(loc_label, "")
             concept = concept_map.get(cid, {})
             return concept.get("name") or (cid.split("_", 1)[-1] if "_" in cid else cid)
-
-        def _concept_element_from_loc(loc_label: str) -> str:
-            return _classify_element(_concept_name_from_loc(loc_label))
-
+        
         def _is_valid_axis_member(table_name: str, axis_name: str, member_name: str) -> bool:
-            if not def_map or not code or not table_name or not axis_name or not member_name:
+            """
+            현재 role_code + table_name + axis_name 기준으로
+            member_name이 def.xml에 등록된 유효 멤버인지 확인한다.
+
+            def_map이 없거나, 해당 table/axis 정보가 없으면 보수적으로 True 반환.
+            """
+            if not def_map:
                 return True
+
+            if not code:
+                return True
+
+            if not table_name or not axis_name or not member_name:
+                return True
+
             tbl_axes = def_map.get(code, {}).get(table_name, {})
             if not tbl_axes:
                 return True
+
             valid_members = tbl_axes.get(axis_name)
             if valid_members is None:
                 return True
+
             return member_name in valid_members
 
-        def _is_valid_axis_child(table_name: str, axis_name: str,
-                                 parent_dim_name: str, child_name: str) -> bool:
-            if not def_edge_map or not code:
+        def _concept_element_from_loc(loc_label: str) -> str:
+            name = _concept_name_from_loc(loc_label)
+            return _classify_element(name)
+
+        def _is_valid_axis_child(
+            table_name: str,
+            axis_name: str,
+            parent_dim_name: str,
+            child_name: str,
+        ) -> bool:
+            """
+            현재 role_code + table + axis 기준으로
+            parent_dim_name -> child_name edge가 def.xml에 있는지 확인.
+
+            def_edge_map이 없거나 해당 정보가 없으면 기존처럼 보수적으로 True.
+            """
+            if not def_edge_map:
                 return True
+
+            if not code:
+                return True
+
             if not table_name or not axis_name or not parent_dim_name or not child_name:
                 return True
+
             tbl_axes = def_edge_map.get(code, {}).get(table_name, {})
             if not tbl_axes:
                 return True
+
             axis_edges = tbl_axes.get(axis_name)
             if not axis_edges:
                 return True
+            
             valid_children = axis_edges.get(parent_dim_name)
+
+            # table/axis edge map이 존재하는데 parent가 없으면,
+            # 이 parent-child branch는 def.xml 기준 hierarchy에 없는 것으로 본다.
             if valid_children is None:
                 return False
+
             return child_name in valid_children
 
-        def dfs(loc_label: str, depth: int, order: float | None, pref_url: str,
-                par_name: str, par_lbl_ko: str, par_gubn: str,
-                current_table_name: str = "", current_axis_name: str = "",
-                current_dim_parent: str = "") -> None:
+
+        def dfs(
+            loc_label: str,
+            depth: int,
+            order: float | None,
+            pref_url: str,
+            par_name: str,
+            par_lbl_ko: str,
+            par_gubn: str,
+            current_table_name: str = "",
+            current_axis_name: str = "",
+            current_dim_parent: str = "",
+        ) -> None:
             cid = loc_to_id.get(loc_label, "")
+
             if order is not None:
                 order_val: Any = int(order) if float(order).is_integer() else order
             else:
                 order_val = ""
 
-            row = make_row(cid, depth, order_val, pref_url, par_name, par_lbl_ko, par_gubn)
+            row = make_row(
+                cid,
+                depth,
+                order_val,
+                pref_url,
+                par_name,
+                par_lbl_ko,
+                par_gubn,
+            )
 
-            row_name    = row.get('Name', '')
-            row_element = row.get('Element', '')
+            row_name = row.get("Name", "")
+            row_element = row.get("Element", "")
 
             next_table_name = current_table_name
-            next_axis_name  = current_axis_name
+            next_axis_name = current_axis_name
             next_dim_parent = current_dim_parent
 
-            if row_element == 'Table':
+            if row_element == "Table":
                 next_table_name = row_name
-                next_axis_name  = ''
-                next_dim_parent = ''
-            elif row_element == 'Axis':
-                next_axis_name  = row_name
+                next_axis_name = ""
+                next_dim_parent = ""
+
+            elif row_element == "Axis":
+                next_axis_name = row_name
                 next_dim_parent = row_name
-            elif row_element in ('Domain', 'Member') and current_axis_name:
+
+            elif row_element in ("Domain", "Member") and current_axis_name:
+                # axis 내부의 domain/member에 들어왔으면,
+                # 이 row가 다음 child의 parent가 된다.
                 next_dim_parent = row_name
 
             if row_name not in _CONSOL_SEPARATE_NAMES:
                 rows.append(row)
 
             for to_lbl, o, p in children.get(loc_label, []):
-                child_name    = _concept_name_from_loc(to_lbl)
+                child_name = _concept_name_from_loc(to_lbl)
                 child_element = _concept_element_from_loc(to_lbl)
 
-                if next_table_name and next_axis_name and child_element in ('Domain', 'Member'):
-                    if not _is_valid_axis_member(next_table_name, next_axis_name, child_name):
+                # axis 내부의 Domain/Member에 대해서만 parent-child edge 검증
+                if (
+                    next_table_name
+                    and next_axis_name
+                    and child_element in ("Domain", "Member")
+                ):
+                    # 1차: 현재 table/axis에 속한 member인지 확인
+                    if not _is_valid_axis_member(
+                        next_table_name,
+                        next_axis_name,
+                        child_name,
+                    ):
                         continue
+                    
+                    # 2차: parent -> child hierarchy가 맞는지 확인
                     if next_dim_parent:
-                        if not _is_valid_axis_child(next_table_name, next_axis_name,
-                                                    next_dim_parent, child_name):
+                        if not _is_valid_axis_child(
+                            next_table_name,
+                            next_axis_name,
+                            next_dim_parent,
+                            child_name,
+                        ):
                             continue
 
-                dfs(to_lbl, depth + 1, o, p,
-                    row['Name'], row['Label(KO)'], row['구분'],
-                    next_table_name, next_axis_name, next_dim_parent)
+                dfs(
+                    to_lbl,
+                    depth + 1,
+                    o,
+                    p,
+                    row["Name"],
+                    row["Label(KO)"],
+                    row["구분"],
+                    next_table_name,
+                    next_axis_name,
+                    next_dim_parent,
+                )
 
         for r in roots:
             dfs(r, 0, None, "", "", "", "")
@@ -990,24 +1119,33 @@ def parse_xbrl_zip(file_bytes: bytes) -> XBRLData:
         labels_ko = _parse_labels(lab_ko_path)
         labels_en = _parse_labels(lab_en_path)
 
-        # def.xml 기반 멤버 필터링 (presentation 파싱 전에 먼저 로드)
+        # def.xml 기반 멤버 필터링 정보를 presentation 파싱 전에 준비
         def_map      = None
+        lineitem_map = None
         def_edge_map = None
+
         try:
             def_path = _find(tmp_dir, "_def.xml")
-            def_map, _, def_edge_map = _parse_def_linkbase(def_path)
+            def_map, lineitem_map, def_edge_map = _parse_def_linkbase(def_path)
         except Exception:
             pass
 
+
         rows, elements = _parse_presentation(
-            pre_path, labels_ko, labels_en, role_def_map, concept_map,
-            def_map, def_edge_map
+            pre_path,
+            labels_ko,
+            labels_en,
+            role_def_map,
+            concept_map,
+            def_map,
+            def_edge_map,
         )
 
+        # def.xml 기반 멤버/축 정보는 위에서 이미 3개 반환값으로 읽었으므로 재파싱하지 않는다.
         _add_axis_group_fields(rows, def_map)
         _postprocess_table_name(rows)
         _remap_gubn(rows)
-        rows = _remove_def_invalid_rows(rows)
+        rows = _remove_def_invalid_rows(rows, lineitem_map)
 
         data.presentation_rows = rows
         data.elements          = elements

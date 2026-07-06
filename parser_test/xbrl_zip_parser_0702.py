@@ -109,38 +109,11 @@ def _classify_element(name: str) -> str:
 def _classify_gubn(name: str) -> str:
     if name.endswith('Table'):                                   return 'TABLE'
     if name.endswith('TextBlock'):                               return 'FOOTNOTES'
-    if name.endswith('Explanatory'):                             return 'FOOTNOTES'
     if name.endswith('Axis'):                                    return 'Axis'
     if name.endswith('Member'):                                  return 'Member'
     if name.endswith('Domain'):                                  return 'Domain'
     if name.endswith('LineItems') or name.endswith('LineItem'): return 'LINEITEM'
     return 'LINEITEM'
-
-
-def _is_text_block_like_concept(name: str = '', dtype: str = '',
-                                lbl_ko: str = '', lbl_en: str = '') -> bool:
-    """이름이 Explanatory/TextBlock으로 끝나지 않아도
-    DataType 또는 Label상 [text block]/[문장영역]이면 문장영역으로 판별.
-    예: DescriptionOfManagingLiquidityRisk → Label(EN): '... [text block]'
-    """
-    n  = str(name  or '')
-    dt = str(dtype or '').split(':')[-1]
-    ko = str(lbl_ko or '').lower()
-    en = str(lbl_en or '').lower()
-
-    if n.endswith(('Explanatory', 'TextBlock')):
-        return True
-    if dt == 'textBlockItemType' or dt.lower().endswith('textblockitemtype'):
-        return True
-
-    label_text = f'{ko} {en}'
-    text_block_markers = (
-        '[text block]', 'text block',
-        '[문장영역]', '문장영역',
-        '[텍스트블록]', '텍스트블록',
-        '[텍스트 블록]', '텍스트 블록',
-    )
-    return any(marker in label_text for marker in text_block_markers)
 
 
 _ROLE_CODE_RE = re.compile(r'([A-Z]{1,3}X?\d{4,})[a-z]*$')
@@ -410,10 +383,6 @@ def _remap_gubn(rows: list) -> None:
 
         if dtype == 'domainItemType':
             row['구분'] = 'DOMAIN'
-        elif _is_text_block_like_concept(name, dtype, row.get('Label(KO)', ''), row.get('Label(EN)', '')):
-            row['구분'] = 'FOOTNOTES'
-            if row.get('Element') == 'item':
-                row['Element'] = 'TextBlock'
         elif name.endswith('Axis'):
             row['구분'] = 'DOMAIN'
         elif name.endswith('Table'):
@@ -684,11 +653,6 @@ def _parse_presentation(
 
             gubn    = _classify_gubn(name)
             element = _classify_element(name)
-            # DataType/Label 기반 TextBlock 판별 (이름 suffix만으로 놓치는 경우 보완)
-            if _is_text_block_like_concept(name, dtype, lbl_ko, lbl_en):
-                gubn = 'FOOTNOTES'
-                if element == 'item':
-                    element = 'TextBlock'
             # Axis 바로 아래 첫 번째 자식은 Domain (이름과 무관하게 위치로 강제 분류)
             if par_gubn == 'Axis':
                 gubn    = 'Domain'
