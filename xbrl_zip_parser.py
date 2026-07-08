@@ -725,8 +725,6 @@ def _parse_presentation(
                 'DataType':        dtype,
                 'Balance':         balance,
                 'Period':          period,
-                'Decimal':         '',
-                'Fact':            '',
                 '구분':             gubn,
                 'Element':         element,
                 '확장여부':          ext,
@@ -937,6 +935,108 @@ def _postprocess_table_name(rows: list[dict]) -> None:
             row["table_name_ko"] = name_ko
 
 
+# ── XBRL instance fact 파싱 ──────────────────────────────────────────────────
+
+_NS_I  = 'http://www.xbrl.org/2003/instance'
+_NS_XD = 'http://xbrl.org/2006/xbrldi'
+_CONSOL_AXIS = 'ConsolidatedAndSeparateFinancialStatementsAxis'
+
+
+def _parse_xbrl_facts(path: str) -> Dict[str, Any]:
+    """
+    XBRL instance(.xbrl) 에서 fact를 파싱한다.
+
+    Returns
+    -------
+    fact_index : {(concept_name, consol_key, year_int): fact_dict}
+      - consol_key : 'C'(연결) / 'S'(별도) / ''(미분류)
+      - year_int   : instant 또는 endDate 의 연도 정수
+      - fact_dict  : {contextRef, unitRef, decimals, value}
+      동일 키가 여러 개이면 dimension 수가 가장 적은 context 우선 보존.
+    cy_year, py_year, by_year : 연도 int 또는 None
+    """
+    tree = ET.parse(path)
+    root = tree.getroot()
+
+    # ── context 파싱 ──────────────────────────────────────────────────────────
+    ctx_meta: Dict[str, dict] = {}
+    for ctx in root.iter(f'{{{_NS_I}}}context'):
+        cid    = ctx.get('id', '')
+        period = ctx.find(f'{{{_NS_I}}}period')
+        if period is None:
+            continue
+        instant_el = period.find(f'{{{_NS_I}}}instant')
+        end_el     = period.find(f'{{{_NS_I}}}endDate')
+        date_str   = (instant_el.text if instant_el is not None else
+                      end_el.text     if end_el     is not None else None)
+        year = int(date_str[:4]) if date_str else None
+
+        members: Dict[str, str] = {}
+        for em in ctx.findall(f'.//{{{_NS_XD}}}explicitMember'):
+            dim = em.get('dimension', '').split(':')[-1]
+            val = (em.text or '').split(':')[-1]
+            members[dim] = val
+
+        consol_member = members.get(_CONSOL_AXIS, '')
+        if 'ConsolidatedMember' in consol_member:
+            consol_key = 'C'
+        elif 'SeparateMember' in consol_member:
+            consol_key = 'S'
+        else:
+            consol_key = ''
+
+        # dimension 수 (ConsolidatedAndSeparateFinancialStatementsAxis 제외)
+        other_dims = {k: v for k, v in members.items() if k != _CONSOL_AXIS}
+
+        ctx_meta[cid] = {
+            'year':       year,
+            'consol_key': consol_key,
+            'members':    members,
+            'dim_count':  len(other_dims),
+        }
+
+    # ── CY / PY / BY 연도 결정 ────────────────────────────────────────────────
+    all_years = sorted({v['year'] for v in ctx_meta.values() if v['year']}, reverse=True)
+    cy_year = all_years[0] if len(all_years) > 0 else None
+    py_year = all_years[1] if len(all_years) > 1 else None
+    by_year = all_years[2] if len(all_years) > 2 else None
+
+    # ── fact 파싱 ─────────────────────────────────────────────────────────────
+    # {(concept, consol_key, year): (dim_count, fact_dict)}
+    # dim_count가 작을수록 단순한 context → 우선 보존
+    _best: Dict[tuple, tuple] = {}
+
+    for elem in root:
+        tag = elem.tag
+        if '}' not in tag:
+            continue
+        ns_part, concept = tag[1:].split('}', 1)
+        if ns_part in (_NS_I, 'http://www.w3.org/2001/XMLSchema-instance'):
+            continue
+
+        ctx_ref = elem.get('contextRef', '')
+        meta    = ctx_meta.get(ctx_ref)
+        if meta is None or meta['year'] is None:
+            continue
+
+        key = (concept, meta['consol_key'], meta['year'])
+        dim_count = meta['dim_count']
+
+        fd = {
+            'contextRef': ctx_ref,
+            'unitRef':    elem.get('unitRef', '') or '',
+            'decimals':   elem.get('decimals', '') or '',
+            'value':      elem.text or '',
+        }
+
+        existing = _best.get(key)
+        if existing is None or dim_count < existing[0]:
+            _best[key] = (dim_count, fd)
+
+    fact_index = {k: v[1] for k, v in _best.items()}
+    return fact_index, cy_year, py_year, by_year
+
+
 # ── 파일 자동 탐지 ────────────────────────────────────────────────────────────
 
 def _find(directory: str, suffix: str) -> str:
@@ -1013,6 +1113,44 @@ def parse_xbrl_zip(file_bytes: bytes) -> XBRLData:
             parent = r.get('parent', '')
             name   = r.get('Name', '')
             r['def_arcrole'] = arc_map.get(rc, {}).get((parent, name), '')
+
+        # fact 부착 (CY_fact / PY_fact / BY_fact + 메타 컬럼)
+        fact_index: Dict[tuple, dict] = {}
+        cy_year = py_year = by_year = None
+        try:
+            if xbrl_path:
+                fact_index, cy_year, py_year, by_year = _parse_xbrl_facts(xbrl_path)
+        except Exception:
+            pass
+
+        def _strip_ctx_prefix(ctx_ref: str) -> str:
+            """CFY2025eFY_ 같은 기간 prefix 제거 → dimension 부분만 반환."""
+            idx = ctx_ref.find('_')
+            return ctx_ref[idx + 1:] if idx != -1 else ctx_ref
+
+        _CONSOL_KEY = {'연결': 'C', '별도': 'S'}
+        for r in rows:
+            concept    = r.get('Name', '')
+            consol_key = _CONSOL_KEY.get(r.get('연결/별도', ''), '')
+
+            def _get_fd(year):
+                if year is None:
+                    return None
+                fd = fact_index.get((concept, consol_key, year))
+                if fd is None and consol_key:
+                    fd = fact_index.get((concept, '', year))
+                return fd
+
+            cy_fd = _get_fd(cy_year)
+            py_fd = _get_fd(py_year)
+            by_fd = _get_fd(by_year)
+
+            r['contextRef'] = _strip_ctx_prefix(cy_fd['contextRef']) if cy_fd else ''
+            r['UnitRef']    = cy_fd['unitRef']  if cy_fd else ''
+            r['Decimal']    = cy_fd['decimals'] if cy_fd else ''
+            r['CY_fact']    = cy_fd['value']    if cy_fd else ''
+            r['PY_fact']    = py_fd['value']    if py_fd else ''
+            r['BY_fact']    = by_fd['value']    if by_fd else ''
 
         data.presentation_rows = rows
         data.elements          = elements
