@@ -356,7 +356,7 @@ def _c1_1(rows, data):
 def _c1_2(rows, data):
     """1-2: 초과적립액(과소적립액) 텍사노미 사용 검토
     Alteryx 로직 (Node 418→415→563):
-      Filter: TABLE_NUMBER in PENSION_TABLES (D834480/D834485)
+      Filter: Table_Number in PENSION_TABLES (D834480/D834485)
       flag_1: Name contains "DefinedBenefitObligationAtPresentValue"
       flag_2: Name contains "PlanAssetsAtFairValue"
       flag_3: Name contains "SurplusDeficitInPlan"
@@ -370,7 +370,7 @@ def _c1_2(rows, data):
         'Set 형태로 사용되지 않은 경우 검출합니다.',
         '특정요소 사용검토', 'Checklist_1-2')
 
-    pension_rows = [r_ for r_ in rows if r_.get('TABLE_NUMBER') in PENSION_TABLES]
+    pension_rows = [r_ for r_ in rows if r_.get('Table_Number') in PENSION_TABLES]
     if not pension_rows:
         return r
 
@@ -406,7 +406,7 @@ def _c1_2(rows, data):
 def _c1_3(rows, data):
     """1-3: 재고자산 세부내역 표 검토
     Alteryx 로직 (Node 365→395/396→367→397→399):
-      1. TABLE_NUMBER in {D826380, D826385} 필터
+      1. Table_Number in {D826380, D826385} 필터
       2. PrevValue = 이전 행 Name (Multi-Row Formula 395)
       3. NextValue = 다음 행 Name (Multi-Row Formula 396)
       4. Name == "GrossCarryingAmountMember" 필터 (Filter 367)
@@ -423,7 +423,7 @@ def _c1_3(rows, data):
         'AllowanceForCreditLossesMember(손실충당금)가 인접한 경우를 검출합니다.',
         '특정요소 사용검토', 'Checklist_1-3')
 
-    inv_rows = [rw for rw in rows if rw.get('TABLE_NUMBER') in INVENTORY_NEW_TABLES]
+    inv_rows = [rw for rw in rows if rw.get('Table_Number') in INVENTORY_NEW_TABLES]
     if not inv_rows:
         return r
 
@@ -543,7 +543,7 @@ def _c2_3(rows, data):
         'Name에 "LoanCommitments"가 포함되지 않은 확장 요소를 검출합니다.',
         '텍사노미 검토', 'Checklist_2-3')
     for row in rows:
-        table_num = row.get('TABLE_NUMBER', '')
+        table_num = row.get('Table_Number', '')
         # 1. D827580/D827585 표만 대상
         if not ('D827580' in table_num or 'D827585' in table_num):
             continue
@@ -572,7 +572,7 @@ def _c2_4(rows, data):
         'CurrentInventoriesInTransit이 아닌 경우 검출합니다.',
         '텍사노미 검토', 'Checklist_2-4')
     for row in rows:
-        table_num = row.get('TABLE_NUMBER', '')
+        table_num = row.get('Table_Number', '')
         # 1. D826380/D826385 표만 대상
         if not ('D826380' in table_num or 'D826385' in table_num):
             continue
@@ -615,7 +615,7 @@ def _c2_6(rows, data):
         'Name이 AverageEffectiveTaxRate가 아닌 경우 검출합니다.',
         '텍사노미 검토', 'Checklist_2-6')
     for row in rows:
-        table_num = row.get('TABLE_NUMBER', '')        
+        table_num = row.get('Table_Number', '')        
         # 1. D835110/D835115 표만 대상
         if not ('D835110' in table_num or 'D835115' in table_num):
             continue
@@ -661,7 +661,7 @@ def _c3_1(rows, data):
 def _c3_2(rows, data):
     """3-2: 공시금액의 사용 적정성 검토
     Alteryx 로직:
-      Left:  축_도메인 == "축" → TABLE_NUMBER + table_name_ko groupby → count >= 2
+      Left:  축_도메인 == "축" → Table_Number + table_name_ko groupby → count >= 2
       Right: 구분 not in ("FOOTNOTES", "TABLE")
       Inner Join → Name == "ReportedAmountMember" → 검토대상
     """
@@ -673,13 +673,13 @@ def _c3_2(rows, data):
 
     axis_df = df[df['축_도메인'] == '축']
     group_counts = (axis_df
-                    .groupby(['role_uri', 'TABLE_NUMBER', 'table_name_ko'])
+                    .groupby(['role_uri', 'Table_Number', 'table_name_ko'])
                     .size()
                     .reset_index(name='axis_count'))
-    left = group_counts[group_counts['axis_count'] >= 2][['role_uri', 'TABLE_NUMBER', 'table_name_ko']]
+    left = group_counts[group_counts['axis_count'] >= 2][['role_uri', 'Table_Number', 'table_name_ko']]
 
     right = df[~df['구분'].isin(['FOOTNOTES', 'TABLE'])]
-    joined = left.merge(right, on=['role_uri', 'TABLE_NUMBER', 'table_name_ko'], how='inner')
+    joined = left.merge(right, on=['role_uri', 'Table_Number', 'table_name_ko'], how='inner')
 
     filtered = joined[joined['Name'] == 'ReportedAmountMember']
     for _, row in filtered.iterrows():
@@ -719,7 +719,7 @@ def _c4_1(rows, data, std=None):
         return r
     for row in rows:
         # 1. D85110/D52000 계열 표의 LINEITEM 행만 대상
-        table_num = row.get('TABLE_NUMBER', '')
+        table_num = row.get('Table_Number', '')
         if not ('D85110' in table_num or 'D52000' in table_num):
             continue
         if row.get('구분') != 'LINEITEM':
@@ -748,7 +748,7 @@ def _c4_2(rows, data, std=None):
         return r
     for row in rows:
         # 1. D85110/D52000 계열 제외 표 LINEITEM 행만 대상
-        table_num = row.get('TABLE_NUMBER', '')
+        table_num = row.get('Table_Number', '')
         if ('D85110' in table_num or 'D52000' in table_num):
             continue
         if row.get('구분') != 'LINEITEM':
@@ -780,7 +780,7 @@ def _c4_3(rows, data, std=None):
         return r
     for row in rows:
         # 1. D83431 표의 LINEITEM 행만 대상
-        if 'D83431' not in row.get('TABLE_NUMBER', ''):
+        if 'D83431' not in row.get('Table_Number', ''):
             continue
         if row.get('구분') != 'LINEITEM':
             continue
@@ -808,7 +808,7 @@ def _c4_4(rows, data, std=None):
         return r
     for row in rows:
         # 1. D83431 제외 표의 LINEITEM 행만 대상
-        if 'D83431' in row.get('TABLE_NUMBER', ''):
+        if 'D83431' in row.get('Table_Number', ''):
             continue
         if row.get('구분') != 'LINEITEM':
             continue
@@ -842,7 +842,7 @@ def _c4_5(rows, data, std=None):
         return r
     for row in rows:
         # 1. D81800 표의 LINEITEM 행만 대상
-        if 'D81800' not in row.get('TABLE_NUMBER', ''):
+        if 'D81800' not in row.get('Table_Number', ''):
             continue
         if row.get('구분') != 'LINEITEM':
             continue
@@ -870,7 +870,7 @@ def _c4_6(rows, data, std=None):
         return r
     for row in rows:
         # 1. D81800 표 제외 LINEITEM 행만 대상
-        if 'D81800' in row.get('TABLE_NUMBER', ''):
+        if 'D81800' in row.get('Table_Number', ''):
             continue
         if row.get('구분') != 'LINEITEM':
             continue
@@ -950,7 +950,7 @@ def _c5_4(rows, data):
         '속성/데이터타입 검토', 'Checklist_5-4')
     EPS_CHECK_NAMES = ('BasicEarningsLossPerShare', 'DilutedEarningsLossPerShare')
     for row in rows:
-        table_num = row.get('TABLE_NUMBER', '')
+        table_num = row.get('Table_Number', '')
         if 'D431410' not in table_num and 'D431415' not in table_num:
             continue
         name = row.get('Name', '')
@@ -1156,7 +1156,7 @@ def _c7_1(rows, data):
 # def _c7_2(rows, data):
 #     """7-2: 현금흐름표 영업활동 현금흐름 검토
 #     Alteryx 로직 (Node 423→428→424→429):
-#       Filter(423): TABLE_NUMBER가 D851100 또는 D851105('CF_DIRECT_TABLES')인 라인
+#       Filter(423): Table_Number가 D851100 또는 D851105('CF_DIRECT_TABLES')인 라인
 #       Multi-Row Formula(428): NextValue = 다음 행의 Name
 #       Filter(424): Name에 CashFlowsFromUsedInOperatingActivitiesLineItems 포함된 라인만
 #       Filter(429): NextValue가 ProfitLoss가 아닌 라인만
@@ -1169,8 +1169,8 @@ def _c7_1(rows, data):
 
 #     table_groups: Dict[tuple, List[dict]] = defaultdict(list)
 #     for row in rows:
-#         if row.get('TABLE_NUMBER') in CF_DIRECT_TABLES:
-#             key = (row.get('role_uri', ''), row.get('TABLE_NUMBER', ''))
+#         if row.get('Table_Number') in CF_DIRECT_TABLES:
+#             key = (row.get('role_uri', ''), row.get('Table_Number', ''))
 #             table_groups[key].append(row)
 
 #     for key, grp_rows in table_groups.items():

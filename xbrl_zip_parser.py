@@ -13,7 +13,7 @@ import tempfile
 import zipfile
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 from xml.etree import ElementTree as ET
 
 # ── dart_taxonomy.json 캐시 ────────────────────────────────────────────────────
@@ -56,14 +56,6 @@ XLINK_ROLE  = f"{{{NS['xlink']}}}role"
 
 
 # ── taxonomy_xlsx_parser 와 동일한 분류 함수 ──────────────────────────────────
-
-def _is_consol(text: str) -> Optional[bool]:
-    for k in ['Consolidated', 'consolidated', '연결']:
-        if k in text: return True
-    for k in ['Separated', 'Separate', 'separated', '별도', 'Nonconsolidated']:
-        if k in text: return False
-    return None
-
 
 def _extract_table_number(role_def: str) -> str:
     m = re.search(r'\[([A-Za-z]{1,3}X?\d{4,})\]', str(role_def))
@@ -182,6 +174,14 @@ def _parse_def_linkbase(path: str):
     def_map      = defaultdict(lambda: defaultdict(lambda: defaultdict(set)))
     def_edge_map = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: defaultdict(set))))
     lineitem_map = defaultdict(lambda: defaultdict(set))
+    arc_map      = defaultdict(dict)   # {role_code → {(from_name, to_name) → arcrole_short}}
+
+    _ARCROLE_SHORT = {
+        ARCROLE_ALL:     'all',
+        ARCROLE_HC_DIM:  'hc-dim',
+        ARCROLE_DIM_DOM: 'dim-dom',
+        ARCROLE_DOM_MEM: 'dom-mem',
+    }
 
     for dl in root.iter(f"{{{NS['link']}}}definitionLink"):
         role_uri  = dl.get(XLINK_ROLE, '')
@@ -216,6 +216,9 @@ def _parse_def_linkbase(path: str):
                 dim_dom.append((frm, to))
             elif arcrole == ARCROLE_DOM_MEM:
                 dom_mem.append((frm, to))
+            short = _ARCROLE_SHORT.get(arcrole)
+            if short and frm and to:
+                arc_map[role_code][(frm, to)] = short
 
         if not hc_dim and not all_arc:
             continue
@@ -263,7 +266,8 @@ def _parse_def_linkbase(path: str):
         for rc, tbls in def_edge_map.items()
     }
     lineitem_map_out = {rc: dict(tbls) for rc, tbls in lineitem_map.items()}
-    return def_map_out, lineitem_map_out, def_edge_map_out
+    arc_map_out = dict(arc_map)
+    return def_map_out, lineitem_map_out, def_edge_map_out, arc_map_out
 
 
 def _add_axis_group_fields(rows: list,
@@ -623,17 +627,10 @@ def _parse_presentation(
         name_ko   = re.sub(r'^\[[^\]]+\]\s*', '', parts[0]).strip()
         name_en   = parts[1].strip() if len(parts) > 1 else ''
 
-        is_c = _is_consol(role_def_str or role_uri)
-        if is_c is None and code:
-            if code[-1] == '0':   is_c = True
-            elif code[-1] == '5': is_c = False
-
         consol_str = '-'
         if code:
             if code[-1] == '0':   consol_str = '연결'
             elif code[-1] == '5': consol_str = '별도'
-
-        sheet_name = code or role_uri.split('/')[-1]
 
         # ── Locator → concept_id ──
         loc_to_id: dict[str, str] = {}
@@ -705,6 +702,7 @@ def _parse_presentation(
                 el_obj.abstract = abstract
                 elements[name] = el_obj
 
+            is_c = True if consol_str == '연결' else (False if consol_str == '별도' else None)
             return {
                 'role_uri':        role_uri,
                 'role_code':       code,
@@ -712,10 +710,9 @@ def _parse_presentation(
                 'role_name_en':    name_en,
                 'is_consolidated': is_c,
                 'Role Definition': role_def_str,
-                'Sheet':           sheet_name,
+                'Sheet':           code,
                 '연결/별도':        consol_str,
                 'Table_Number':    table_num,
-                'TABLE_NUMBER':    table_num,
                 'depth':           depth,
                 'parent':          par_name,
                 'parent_label_ko': par_lbl_ko,
@@ -993,9 +990,10 @@ def parse_xbrl_zip(file_bytes: bytes) -> XBRLData:
         # def.xml 기반 멤버 필터링 (presentation 파싱 전에 먼저 로드)
         def_map      = None
         def_edge_map = None
+        arc_map      = {}
         try:
             def_path = _find(tmp_dir, "_def.xml")
-            def_map, _, def_edge_map = _parse_def_linkbase(def_path)
+            def_map, _, def_edge_map, arc_map = _parse_def_linkbase(def_path)
         except Exception:
             pass
 
@@ -1008,6 +1006,13 @@ def parse_xbrl_zip(file_bytes: bytes) -> XBRLData:
         _postprocess_table_name(rows)
         _remap_gubn(rows)
         rows = _remove_def_invalid_rows(rows)
+
+        # def.xml arcrole 부착 (parent-name 쌍으로 매칭)
+        for r in rows:
+            rc     = r.get('role_code', '')
+            parent = r.get('parent', '')
+            name   = r.get('Name', '')
+            r['def_arcrole'] = arc_map.get(rc, {}).get((parent, name), '')
 
         data.presentation_rows = rows
         data.elements          = elements
