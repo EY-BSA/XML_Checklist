@@ -1312,6 +1312,7 @@ if __name__ == '__main__':
                 'Label(KO)':  r['Label(KO)'],
                 'Label(EN)':  r['Label(EN)'],
                 'Name':       r['Name'],
+                'Element':    r.get('Element', ''),
                 '아이템ID':    f"{r['Prefix']}_{r['Name']}" if r['Prefix'] else r['Name'],
                 'Arcrole':    r['Arcrole'],
                 '연결/별도':    r['연결/별도'],
