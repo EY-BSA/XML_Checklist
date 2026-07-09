@@ -473,27 +473,15 @@ def _remove_def_invalid_rows(rows: list) -> list:
 # ── taxonomy_xlsx_parser.TaxonomyXlsxData 호환 클래스 ────────────────────────
 
 class XBRLData:
-    class _El:
-        def __init__(self, lko: str = '', len_: str = '', lr: str = ''):
-            self.label_ko   = lko
-            self.label_en   = len_
-            self.label_role = lr
-            self.abstract   = False
-
     def __init__(self):
         self.company_name: str        = ''
-        self.report_date:  str        = ''
-        self.entity_id:    str        = ''
         self.fy:           str        = ''
         self.report_period: str       = ''
         self.presentation_rows: List[dict] = []
         self.errors:        List[str] = []
-        self.axis_domain_rows: List[dict] = []
-        self.elements: Dict[str, object] = {}
         self.contexts: Dict[str, object] = {}
         self.facts:    list = []
         self.def_map:  dict = {}
-        self._fact_elements: set = set()
 
 
 # ── XSD 파싱 ─────────────────────────────────────────────────────────────────
@@ -620,12 +608,11 @@ def _parse_presentation(
     concept_map: dict[str, dict],
     def_map:      dict | None = None,
     def_edge_map: dict | None = None,
-) -> tuple[list[dict], dict[str, object]]:
+) -> list[dict]:
     tree = ET.parse(path)
     root = tree.getroot()
 
-    rows:     list[dict]          = []
-    elements: dict[str, object]   = {}
+    rows: list[dict] = []
 
     for pl in root.iter(f"{{{NS['link']}}}presentationLink"):
         role_uri     = pl.get(XLINK_ROLE, "")
@@ -717,11 +704,6 @@ def _parse_presentation(
             if gubn == 'TABLE':
                 current_table_name_ko = lbl_ko
 
-            if name not in elements:
-                el_obj = XBRLData._El(lbl_ko, lbl_en, lbl_role)
-                el_obj.abstract = abstract
-                elements[name] = el_obj
-
             return {
                 'role_uri':        role_uri,
                 'role_code':       code,
@@ -745,8 +727,6 @@ def _parse_presentation(
                 'DataType':        dtype,
                 'Balance':         balance,
                 'Period':          period,
-                'Decimal':         '',
-                'Fact':            '',
                 '구분':             gubn,
                 'Element':         element,
                 '확장여부':          ext,
@@ -754,9 +734,6 @@ def _parse_presentation(
                 '별칭여부':          alias,
                 'PreferredLabel':  pref_url,
                 'Arcrole':         arcrole,
-                'ContextRef':      '',
-                'Fact_N':          0,
-                'has_fact':        False,
                 'abstract':        abstract,
                 'table_name_ko':   current_table_name_ko,
             }
@@ -849,7 +826,7 @@ def _parse_presentation(
         for r in roots:
             dfs(r, 0, None, "", "", "", "")
 
-    return rows, elements
+    return rows
 
 
 # ── 회사명 / 기간 추출 ────────────────────────────────────────────────────────
@@ -1074,38 +1051,6 @@ def _fact_candidates(row: dict, by_name: dict, contexts: dict, max_year: str,
     return cands
 
 
-def _attach_facts(rows: list, contexts: dict, facts: list,
-                  def_map: dict | None = None) -> None:
-    """LINEITEM/FOOTNOTES 행에 당기 Fact 값·ContextRef·Decimal·Fact_N 매칭.
-
-    def_map이 주어지면 def.xml 하이퍼큐브 기준으로 유효한 fact만 매칭한다.
-    Fact/ContextRef에는 추가 dimension이 가장 적은(총계) fact를 기록하고,
-    Fact_N에는 당기 fact 후보 수를 기록한다.
-    Fact_N > 1 이면 멤버별 fact가 여러 개라는 뜻 (엑셀 lineitem_facts 시트 참고).
-    """
-    if not facts:
-        return
-
-    max_year = _current_year(contexts)
-
-    by_name: dict[str, list[dict]] = defaultdict(list)
-    for f in facts:
-        by_name[f['Name']].append(f)
-
-    for row in rows:
-        if row.get('구분') not in ('LINEITEM', 'FOOTNOTES'):
-            continue
-        cands = _fact_candidates(row, by_name, contexts, max_year, def_map)
-        if not cands:
-            continue
-        f, _ = cands[0]
-        row['Fact']       = f['value']
-        row['ContextRef'] = f['contextRef']
-        row['Decimal']    = f['decimals']
-        row['has_fact']   = True
-        row['Fact_N']     = len(cands)
-
-
 # ── 파일 자동 탐지 ────────────────────────────────────────────────────────────
 
 def _find(directory: str, suffix: str) -> str:
@@ -1141,8 +1086,6 @@ def parse_xbrl_zip(file_bytes: bytes) -> XBRLData:
         lab_ko_path = _find(tmp_dir, "_lab-ko.xml")
         lab_en_path = _find(tmp_dir, "_lab-en.xml")
 
-        data.entity_id = Path(xsd_path).stem
-
         # 회사명 / 회계연도 / 분기: .xbrl 인스턴스에서 추출
         xbrl_path: str | None = None
         try:
@@ -1166,7 +1109,7 @@ def parse_xbrl_zip(file_bytes: bytes) -> XBRLData:
         except Exception:
             pass
 
-        rows, elements = _parse_presentation(
+        rows = _parse_presentation(
             pre_path, labels_ko, labels_en, role_def_map, concept_map,
             def_map, def_edge_map
         )
@@ -1183,40 +1126,15 @@ def parse_xbrl_zip(file_bytes: bytes) -> XBRLData:
         _remap_gubn(rows)
         rows = _remove_def_invalid_rows(rows)
 
-        # 인스턴스에서 context / fact 추출 후 행에 매칭 (def.xml 하이퍼큐브 검증 포함)
+        # 인스턴스에서 context / fact 추출 (def.xml 하이퍼큐브 검증은 result 생성 시 수행)
         data.def_map = def_map or {}
         if xbrl_path:
             try:
-                contexts, facts = _parse_instance(xbrl_path)
-                data.contexts       = contexts
-                data.facts          = facts
-                data._fact_elements = {f['Name'] for f in facts}
-                _attach_facts(rows, contexts, facts, def_map)
+                data.contexts, data.facts = _parse_instance(xbrl_path)
             except Exception as e:
                 data.errors.append(f'instance parse: {e}')
 
         data.presentation_rows = rows
-        data.elements          = elements
-
-        # GroupID가 있는 행만 추출
-        # (role_uri, xbrl_table_name, Axis_Name, Name) 기준 중복 제거
-        # → 같은 XBRL table이 Presentation에 두 번 나타나는 경우 방지
-        seen: set[tuple] = set()
-        axis_domain: list[dict] = []
-        for r in rows:
-            if r.get('GroupID') is None:
-                continue
-            dedup_key = (
-                r.get('role_uri', ''),
-                r.get('xbrl_table_name', ''),
-                r.get('Axis_Name', ''),
-                r.get('Name', ''),
-            )
-            if dedup_key in seen:
-                continue
-            seen.add(dedup_key)
-            axis_domain.append(r)
-        data.axis_domain_rows = axis_domain
 
     except Exception as e:
         data.errors.append(str(e))
@@ -1297,23 +1215,23 @@ if __name__ == '__main__':
             sort_key = (table_order.get(tkey, 10**9), mem_key, li_idx, period_rank)
             tname = r.get('xbrl_table_name', '')
             keyed_rows.append((sort_key, {
-                'Sheet':      r['Sheet'],
-                '주석':        r['role_name_ko'],
+                '주석(ID)':    r['Sheet'],
+                '주석(KO)':    r['role_name_ko'],
                 '주석(EN)':    r['role_name_en'],
-                '표':          r['table_name_ko'],
+                '표(KO)':      r['table_name_ko'],
                 '표(EN)':      label_en.get(tname, '') or r['role_name_en'],
-                '표ID':        name_to_id.get(tname, tname),
-                '축':          ' | '.join(label_ko.get(ax, ax) for ax in dims),
+                '표(ID)':      name_to_id.get(tname, tname),
+                '축(KO)':      ' | '.join(label_ko.get(ax, ax) for ax in dims),
                 '축(EN)':      ' | '.join(label_en.get(ax, ax) for ax in dims),
-                '축ID':        ' | '.join(name_to_id.get(ax, ax) for ax in dims),
+                '축(ID)':      ' | '.join(name_to_id.get(ax, ax) for ax in dims),
                 '멤버(KO)':    ' | '.join(label_ko.get(m, m) for m in dims.values()),
                 '멤버(EN)':    ' | '.join(label_en.get(m, m) for m in dims.values()),
-                '멤버ID':      ' | '.join(name_to_id.get(m, m) for m in dims.values()),
-                'Label(KO)':  r['Label(KO)'],
-                'Label(EN)':  r['Label(EN)'],
+                '멤버(ID)':    ' | '.join(name_to_id.get(m, m) for m in dims.values()),
+                '아이템(KO)':  r['Label(KO)'],
+                '아이템(EN)':  r['Label(EN)'],
                 'Name':       r['Name'],
                 'Element':    r.get('Element', ''),
-                '아이템ID':    f"{r['Prefix']}_{r['Name']}" if r['Prefix'] else r['Name'],
+                '아이템(ID)':  f"{r['Prefix']}_{r['Name']}" if r['Prefix'] else r['Name'],
                 'Arcrole':    r['Arcrole'],
                 '연결/별도':    r['연결/별도'],
                 '기간':        {0: '당기', 1: '전기'}.get(period_rank, '전전기'),
