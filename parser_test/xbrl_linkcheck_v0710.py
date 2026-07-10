@@ -1,7 +1,13 @@
 """
-xbrl_zip_parser.py
-XBRL ZIP 파일 → checklist_engine 호환 presentation_rows 변환기
-taxonomy_xlsx_parser.parse_taxonomy_xlsx() 와 동일한 출력 형태
+xbrl_linkcheck_v0710.py
+XBRL ZIP → def.xml 기준 fact 추출기 (CY/PY/BY 컬럼 방식)
+
+def.xml 하이퍼큐브(표→축→멤버)로 유효성을 검증한 fact를
+사람이 표를 읽는 순서(주석 → 표 → 멤버 → 라인아이템)로 정렬하고
+당기/전기/전전기를 CY_fact / PY_fact / BY_fact 컬럼으로 나란히 배치.
+
+실행:
+    python3 parser_test/xbrl_linkcheck_v0710.py [zip경로] [출력경로.xlsx]
 """
 from __future__ import annotations
 
@@ -13,11 +19,12 @@ import tempfile
 import zipfile
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from xml.etree import ElementTree as ET
 
 # ── dart_taxonomy.json 캐시 ────────────────────────────────────────────────────
-_TAXONOMY_JSON = Path(__file__).parent / "dart_taxonomy.json"
+# 이 사본은 parser_test/ 안에 있으므로 프로젝트 루트의 json을 참조
+_TAXONOMY_JSON = Path(__file__).parent.parent / "dart_taxonomy.json"
 _taxonomy_cache: dict[str, dict] | None = None
 
 
@@ -56,6 +63,14 @@ XLINK_ROLE  = f"{{{NS['xlink']}}}role"
 
 
 # ── taxonomy_xlsx_parser 와 동일한 분류 함수 ──────────────────────────────────
+
+def _is_consol(text: str) -> Optional[bool]:
+    for k in ['Consolidated', 'consolidated', '연결']:
+        if k in text: return True
+    for k in ['Separated', 'Separate', 'separated', '별도', 'Nonconsolidated']:
+        if k in text: return False
+    return None
+
 
 def _extract_table_number(role_def: str) -> str:
     m = re.search(r'\[([A-Za-z]{1,3}X?\d{4,})\]', str(role_def))
@@ -174,14 +189,8 @@ def _parse_def_linkbase(path: str):
     def_map      = defaultdict(lambda: defaultdict(lambda: defaultdict(set)))
     def_edge_map = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: defaultdict(set))))
     lineitem_map = defaultdict(lambda: defaultdict(set))
-    arc_map      = defaultdict(dict)   # {role_code → {(from_name, to_name) → arcrole_short}}
-
-    _ARCROLE_SHORT = {
-        ARCROLE_ALL:     'all',
-        ARCROLE_HC_DIM:  'hc-dim',
-        ARCROLE_DIM_DOM: 'dim-dom',
-        ARCROLE_DOM_MEM: 'dom-mem',
-    }
+    # {role_code → {concept_name → arcrole 짧은이름}} : 해당 개념으로 들어오는 def arc
+    def_arcrole_map: dict[str, dict[str, str]] = defaultdict(dict)
 
     for dl in root.iter(f"{{{NS['link']}}}definitionLink"):
         role_uri  = dl.get(XLINK_ROLE, '')
@@ -208,6 +217,11 @@ def _parse_def_linkbase(path: str):
             to  = locs.get(arc.get(XLINK_TO,   ''), '')
             if not frm or not to:
                 continue
+            if arcrole:
+                # dimension-default는 보조 arc → 이미 기록된 arcrole을 덮지 않음
+                if (not arcrole.endswith('dimension-default')
+                        or to not in def_arcrole_map[role_code]):
+                    def_arcrole_map[role_code][to] = arcrole
             if arcrole == ARCROLE_ALL:
                 all_arc.append((frm, to))
             elif arcrole == ARCROLE_HC_DIM:
@@ -216,9 +230,6 @@ def _parse_def_linkbase(path: str):
                 dim_dom.append((frm, to))
             elif arcrole == ARCROLE_DOM_MEM:
                 dom_mem.append((frm, to))
-            short = _ARCROLE_SHORT.get(arcrole)
-            if short and frm and to:
-                arc_map[role_code][(frm, to)] = short
 
         if not hc_dim and not all_arc:
             continue
@@ -266,8 +277,7 @@ def _parse_def_linkbase(path: str):
         for rc, tbls in def_edge_map.items()
     }
     lineitem_map_out = {rc: dict(tbls) for rc, tbls in lineitem_map.items()}
-    arc_map_out = dict(arc_map)
-    return def_map_out, lineitem_map_out, def_edge_map_out, arc_map_out
+    return def_map_out, lineitem_map_out, def_edge_map_out, dict(def_arcrole_map)
 
 
 def _add_axis_group_fields(rows: list,
@@ -482,6 +492,7 @@ class XBRLData:
         self.elements: Dict[str, object] = {}
         self.contexts: Dict[str, object] = {}
         self.facts:    list = []
+        self.def_map:  dict = {}
         self._fact_elements: set = set()
 
 
@@ -627,10 +638,17 @@ def _parse_presentation(
         name_ko   = re.sub(r'^\[[^\]]+\]\s*', '', parts[0]).strip()
         name_en   = parts[1].strip() if len(parts) > 1 else ''
 
+        is_c = _is_consol(role_def_str or role_uri)
+        if is_c is None and code:
+            if code[-1] == '0':   is_c = True
+            elif code[-1] == '5': is_c = False
+
         consol_str = '-'
         if code:
             if code[-1] == '0':   consol_str = '연결'
             elif code[-1] == '5': consol_str = '별도'
+
+        sheet_name = code or role_uri.split('/')[-1]
 
         # ── Locator → concept_id ──
         loc_to_id: dict[str, str] = {}
@@ -638,7 +656,7 @@ def _parse_presentation(
             loc_to_id[loc.get(XLINK_LABEL, "")] = _href_to_id(loc.get(XLINK_HREF, ""))
 
         # ── Arc 그래프 ──
-        children: dict[str, list[tuple[str, float, str]]] = defaultdict(list)
+        children: dict[str, list[tuple[str, float, str, str]]] = defaultdict(list)
         targets:  set[str] = set()
         sources:  set[str] = set()
         for arc in pl.findall(f"{{{NS['link']}}}presentationArc"):
@@ -648,8 +666,9 @@ def _parse_presentation(
                 order = float(arc.get("order", "0"))
             except ValueError:
                 order = 0.0
-            pref = arc.get("preferredLabel", "") or ""
-            children[f_].append((t_, order, pref))
+            pref    = arc.get("preferredLabel", "") or ""
+            arcrole = arc.get(f"{{{NS['xlink']}}}arcrole", "")
+            children[f_].append((t_, order, pref, arcrole))
             sources.add(f_)
             targets.add(t_)
 
@@ -664,7 +683,8 @@ def _parse_presentation(
         current_table_name_ko = ''
 
         def make_row(cid: str, depth: int, order_val: Any, pref_url: str,
-                     par_name: str, par_lbl_ko: str, par_gubn: str) -> dict:
+                     par_name: str, par_lbl_ko: str, par_gubn: str,
+                     arcrole: str = "") -> dict:
             nonlocal current_table_name_ko
 
             concept  = concept_map.get(cid, {})
@@ -702,7 +722,6 @@ def _parse_presentation(
                 el_obj.abstract = abstract
                 elements[name] = el_obj
 
-            is_c = True if consol_str == '연결' else (False if consol_str == '별도' else None)
             return {
                 'role_uri':        role_uri,
                 'role_code':       code,
@@ -710,9 +729,10 @@ def _parse_presentation(
                 'role_name_en':    name_en,
                 'is_consolidated': is_c,
                 'Role Definition': role_def_str,
-                'Sheet':           code,
+                'Sheet':           sheet_name,
                 '연결/별도':        consol_str,
                 'Table_Number':    table_num,
+                'TABLE_NUMBER':    table_num,
                 'depth':           depth,
                 'parent':          par_name,
                 'parent_label_ko': par_lbl_ko,
@@ -733,6 +753,9 @@ def _parse_presentation(
                 'Client_Negate':   client_negate,
                 '별칭여부':          alias,
                 'PreferredLabel':  pref_url,
+                'Arcrole':         arcrole,
+                'ContextRef':      '',
+                'Fact_N':          0,
                 'has_fact':        False,
                 'abstract':        abstract,
                 'table_name_ko':   current_table_name_ko,
@@ -777,14 +800,15 @@ def _parse_presentation(
         def dfs(loc_label: str, depth: int, order: float | None, pref_url: str,
                 par_name: str, par_lbl_ko: str, par_gubn: str,
                 current_table_name: str = "", current_axis_name: str = "",
-                current_dim_parent: str = "") -> None:
+                current_dim_parent: str = "", arcrole: str = "") -> None:
             cid = loc_to_id.get(loc_label, "")
             if order is not None:
                 order_val: Any = int(order) if float(order).is_integer() else order
             else:
                 order_val = ""
 
-            row = make_row(cid, depth, order_val, pref_url, par_name, par_lbl_ko, par_gubn)
+            row = make_row(cid, depth, order_val, pref_url, par_name, par_lbl_ko, par_gubn,
+                           arcrole)
 
             row_name    = row.get('Name', '')
             row_element = row.get('Element', '')
@@ -806,7 +830,7 @@ def _parse_presentation(
             if row_name not in _CONSOL_SEPARATE_NAMES:
                 rows.append(row)
 
-            for to_lbl, o, p in children.get(loc_label, []):
+            for to_lbl, o, p, ar in children.get(loc_label, []):
                 child_name    = _concept_name_from_loc(to_lbl)
                 child_element = _concept_element_from_loc(to_lbl)
 
@@ -820,7 +844,7 @@ def _parse_presentation(
 
                 dfs(to_lbl, depth + 1, o, p,
                     row['Name'], row['Label(KO)'], row['구분'],
-                    next_table_name, next_axis_name, next_dim_parent)
+                    next_table_name, next_axis_name, next_dim_parent, ar)
 
         for r in roots:
             dfs(r, 0, None, "", "", "", "")
@@ -937,6 +961,151 @@ def _postprocess_table_name(rows: list[dict]) -> None:
             row["table_name_ko"] = name_ko
 
 
+# ── 인스턴스(.xbrl) 파싱: context / fact ─────────────────────────────────────
+
+_XBRLI = f"{{{NS['xbrli']}}}"
+_XBRLDI_EXPLICIT = '{http://xbrl.org/2006/xbrldi}explicitMember'
+_CONSOL_AXIS = 'ConsolidatedAndSeparateFinancialStatementsAxis'
+
+
+def _localname(qname: str) -> str:
+    """'ifrs-full:Assets' 또는 '{uri}Assets' → 'Assets'"""
+    return qname.split(':')[-1].split('}')[-1].strip()
+
+
+def _parse_instance(path: str) -> tuple[dict[str, dict], list[dict]]:
+    """
+    인스턴스 문서에서 context와 fact를 추출.
+
+    Returns
+    -------
+    contexts : {ctx_id → {'period_type': 'INSTANT'|'DURATION',
+                          'start': str, 'end': str,
+                          'dims': {axis_name: member_name}}}   (local name 기준)
+    facts    : [{'Name', 'contextRef', 'unitRef', 'decimals', 'value'}]
+    """
+    tree = ET.parse(path)
+    root = tree.getroot()
+
+    contexts: dict[str, dict] = {}
+    for ctx in root.iter(_XBRLI + 'context'):
+        cid = ctx.get('id', '')
+        if not cid:
+            continue
+        dims: dict[str, str] = {}
+        for em in ctx.iter(_XBRLDI_EXPLICIT):
+            axis = _localname(em.get('dimension', ''))
+            if axis:
+                dims[axis] = _localname(em.text or '')
+        instant = ctx.find(f'.//{_XBRLI}instant')
+        if instant is not None:
+            ptype, start, end = 'INSTANT', '', (instant.text or '').strip()
+        else:
+            s = ctx.find(f'.//{_XBRLI}startDate')
+            e = ctx.find(f'.//{_XBRLI}endDate')
+            ptype = 'DURATION'
+            start = (s.text or '').strip() if s is not None else ''
+            end   = (e.text or '').strip() if e is not None else ''
+        contexts[cid] = {'period_type': ptype, 'start': start, 'end': end, 'dims': dims}
+
+    # fact = contextRef 속성을 가진 루트 직속 요소 (DART 인스턴스는 flat 구조)
+    facts: list[dict] = []
+    for el in root:
+        ctx_ref = el.get('contextRef')
+        if not ctx_ref:
+            continue
+        facts.append({
+            'Name':       _localname(el.tag),
+            'contextRef': ctx_ref,
+            'unitRef':    el.get('unitRef', ''),
+            'decimals':   el.get('decimals', ''),
+            'value':      (el.text or '').strip(),
+        })
+    return contexts, facts
+
+
+def _current_year(contexts: dict) -> str:
+    return max((c['end'][:4] for c in contexts.values() if c['end']), default='')
+
+
+def _fact_candidates(row: dict, by_name: dict, contexts: dict, max_year: str,
+                     def_map: dict | None = None,
+                     all_periods: bool = False) -> list[tuple[dict, dict]]:
+    """행(개념)에 해당하는 fact 후보 목록.
+
+    1) 개념 Name이 같고
+    2) 당기 컨텍스트만 (all_periods=True면 전기 포함 전체)
+    3) 연결/별도 축 멤버가 행의 is_consolidated와 모순되지 않으며
+    4) def_map이 주어지면: 컨텍스트의 모든 dimension(연결/별도 축 제외)이
+       행이 속한 표(xbrl_table_name)의 def.xml상 유효한 축·멤버여야 함.
+       (표가 def.xml에 없으면 추가 dimension 없는 fact만 허용)
+    연결/별도 축 외 추가 dimension이 적은 순(총계 우선)으로 정렬해 반환.
+    """
+    tbl_axes = None
+    if def_map is not None:
+        tbl_axes = def_map.get(row.get('role_code', ''), {}) \
+                          .get(row.get('xbrl_table_name', ''), {})
+
+    cands = []
+    for f in by_name.get(row.get('Name', ''), []):
+        ctx = contexts.get(f['contextRef'])
+        if ctx is None:
+            continue
+        if not all_periods and ctx['end'][:4] != max_year:
+            continue
+        consol = ctx['dims'].get(_CONSOL_AXIS)
+        if row.get('is_consolidated') is True and consol == 'SeparateMember':
+            continue
+        if row.get('is_consolidated') is False and consol == 'ConsolidatedMember':
+            continue
+        if def_map is not None:
+            ok = True
+            for ax, mem in ctx['dims'].items():
+                if ax == _CONSOL_AXIS:
+                    continue
+                valid = tbl_axes.get(ax) if tbl_axes else None
+                if valid is None or mem not in valid:
+                    ok = False
+                    break
+            if not ok:
+                continue
+        cands.append((f, ctx))
+    cands.sort(key=lambda fc: len([a for a in fc[1]['dims'] if a != _CONSOL_AXIS]))
+    return cands
+
+
+def _attach_facts(rows: list, contexts: dict, facts: list,
+                  def_map: dict | None = None) -> None:
+    """LINEITEM/FOOTNOTES 행에 당기 Fact 값·ContextRef·Decimal·Fact_N 매칭.
+
+    def_map이 주어지면 def.xml 하이퍼큐브 기준으로 유효한 fact만 매칭한다.
+    Fact/ContextRef에는 추가 dimension이 가장 적은(총계) fact를 기록하고,
+    Fact_N에는 당기 fact 후보 수를 기록한다.
+    Fact_N > 1 이면 멤버별 fact가 여러 개라는 뜻 (엑셀 lineitem_facts 시트 참고).
+    """
+    if not facts:
+        return
+
+    max_year = _current_year(contexts)
+
+    by_name: dict[str, list[dict]] = defaultdict(list)
+    for f in facts:
+        by_name[f['Name']].append(f)
+
+    for row in rows:
+        if row.get('구분') not in ('LINEITEM', 'FOOTNOTES'):
+            continue
+        cands = _fact_candidates(row, by_name, contexts, max_year, def_map)
+        if not cands:
+            continue
+        f, _ = cands[0]
+        row['Fact']       = f['value']
+        row['ContextRef'] = f['contextRef']
+        row['Decimal']    = f['decimals']
+        row['has_fact']   = True
+        row['Fact_N']     = len(cands)
+
+
 # ── 파일 자동 탐지 ────────────────────────────────────────────────────────────
 
 def _find(directory: str, suffix: str) -> str:
@@ -988,12 +1157,12 @@ def parse_xbrl_zip(file_bytes: bytes) -> XBRLData:
         labels_en = _parse_labels(lab_en_path)
 
         # def.xml 기반 멤버 필터링 (presentation 파싱 전에 먼저 로드)
-        def_map      = None
-        def_edge_map = None
-        arc_map      = {}
+        def_map         = None
+        def_edge_map    = None
+        def_arcrole_map = {}
         try:
             def_path = _find(tmp_dir, "_def.xml")
-            def_map, _, def_edge_map, arc_map = _parse_def_linkbase(def_path)
+            def_map, _, def_edge_map, def_arcrole_map = _parse_def_linkbase(def_path)
         except Exception:
             pass
 
@@ -1002,17 +1171,29 @@ def parse_xbrl_zip(file_bytes: bytes) -> XBRLData:
             def_map, def_edge_map
         )
 
+        # Arcrole: def.xml arc(all/hypercube-dimension/dimension-domain/domain-member)의
+        # 전체 URI로 덮어씀. def.xml에 없는 개념은 presentation의 parent-child URI 유지
+        for row in rows:
+            ar = def_arcrole_map.get(row.get('role_code', ''), {}).get(row.get('Name', ''))
+            if ar:
+                row['Arcrole'] = ar
+
         _add_axis_group_fields(rows, def_map)
         _postprocess_table_name(rows)
         _remap_gubn(rows)
         rows = _remove_def_invalid_rows(rows)
 
-        # def.xml arcrole 부착 (parent-name 쌍으로 매칭)
-        for r in rows:
-            rc     = r.get('role_code', '')
-            parent = r.get('parent', '')
-            name   = r.get('Name', '')
-            r['def_arcrole'] = arc_map.get(rc, {}).get((parent, name), '')
+        # 인스턴스에서 context / fact 추출 후 행에 매칭 (def.xml 하이퍼큐브 검증 포함)
+        data.def_map = def_map or {}
+        if xbrl_path:
+            try:
+                contexts, facts = _parse_instance(xbrl_path)
+                data.contexts       = contexts
+                data.facts          = facts
+                data._fact_elements = {f['Name'] for f in facts}
+                _attach_facts(rows, contexts, facts, def_map)
+            except Exception as e:
+                data.errors.append(f'instance parse: {e}')
 
         data.presentation_rows = rows
         data.elements          = elements
@@ -1043,3 +1224,154 @@ def parse_xbrl_zip(file_bytes: bytes) -> XBRLData:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
     return data
+
+
+# ── CY/PY/BY 컬럼 방식 wide 행 생성 ──────────────────────────────────────────
+
+_META_COLS = [
+    'Sheet', '주석', '주석(EN)', '표', '표(EN)', '표ID',
+    '축', '축(EN)', '축ID', '멤버(KO)', '멤버(EN)', '멤버ID',
+    'Label(KO)', 'Label(EN)', 'Name', '아이템ID', 'Arcrole', '연결/별도',
+]
+
+
+def _strip_ctx_prefix(ctx_ref: str) -> str:
+    idx = ctx_ref.find('_')
+    return ctx_ref[idx + 1:] if idx != -1 else ctx_ref
+
+
+def _note_no(r: dict) -> tuple:
+    m = re.match(r'\s*(\d+)(?:-(\d+))?\s*\.', r.get('role_name_ko', ''))
+    return (int(m.group(1)), int(m.group(2) or 0)) if m else (0, 0)
+
+
+def parse_xbrl_zip_wide(file_bytes: bytes) -> list[dict]:
+    """
+    ZIP 바이트 → CY/PY/BY 컬럼 방식 wide 행 리스트
+
+    출력 컬럼:
+        Sheet, 주석, 주석(EN), 표, 표(EN), 표ID,
+        축, 축(EN), 축ID, 멤버(KO), 멤버(EN), 멤버ID,
+        Label(KO), Label(EN), Name, 아이템ID, Arcrole, 연결/별도,
+        contextRef, UnitRef, Decimal, CY_fact, PY_fact, BY_fact
+    """
+    data = parse_xbrl_zip(file_bytes)
+
+    max_year = _current_year(data.contexts)
+    all_years = sorted(
+        {c['end'][:4] for c in data.contexts.values() if c['end']},
+        reverse=True,
+    )
+    cy_year = all_years[0] if len(all_years) > 0 else ''
+    py_year = all_years[1] if len(all_years) > 1 else ''
+    by_year = all_years[2] if len(all_years) > 2 else ''
+
+    by_name: dict = defaultdict(list)
+    for f in data.facts:
+        by_name[f['Name']].append(f)
+
+    rows_sorted = sorted(
+        data.presentation_rows,
+        key=lambda r: (_note_no(r), r.get('Sheet', '')),
+    )
+
+    table_order:  dict = {}
+    member_order: dict = {}
+    label_ko:     dict = {}
+    label_en:     dict = {}
+    name_to_id:   dict = {}
+
+    for i, r in enumerate(rows_sorted):
+        label_ko.setdefault(r['Name'], r['Label(KO)'])
+        label_en.setdefault(r['Name'], r['Label(EN)'])
+        name_to_id.setdefault(
+            r['Name'],
+            f"{r['Prefix']}_{r['Name']}" if r.get('Prefix') else r['Name'],
+        )
+        tkey = (r.get('Sheet', ''), r.get('xbrl_table_name', ''))
+        table_order.setdefault(tkey, i)
+        if r.get('Element') in ('Domain', 'Member'):
+            member_order.setdefault((*tkey, r['Name']), i)
+
+    # (sort_key, meta_tuple) → {year: (fact, ctx)}
+    grouped: dict = {}
+
+    for li_idx, r in enumerate(rows_sorted):
+        if r.get('구분') != 'LINEITEM':
+            continue
+        tkey  = (r.get('Sheet', ''), r.get('xbrl_table_name', ''))
+        tname = r.get('xbrl_table_name', '')
+
+        for f, ctx in _fact_candidates(
+            r, by_name, data.contexts, max_year, data.def_map, all_periods=True
+        ):
+            dims    = {k: v for k, v in ctx['dims'].items() if k != _CONSOL_AXIS}
+            mem_key = tuple(sorted(
+                member_order.get((*tkey, m), 10**9) for m in dims.values()
+            ))
+            sort_key = (table_order.get(tkey, 10**9), mem_key, li_idx)
+
+            meta = (
+                r.get('Sheet', ''),
+                r.get('role_name_ko', ''),
+                r.get('role_name_en', ''),
+                r.get('table_name_ko', ''),
+                label_en.get(tname, '') or r.get('role_name_en', ''),
+                name_to_id.get(tname, tname),
+                ' | '.join(label_ko.get(ax, ax) for ax in dims),
+                ' | '.join(label_en.get(ax, ax) for ax in dims),
+                ' | '.join(name_to_id.get(ax, ax) for ax in dims),
+                ' | '.join(label_ko.get(m, m) for m in dims.values()),
+                ' | '.join(label_en.get(m, m) for m in dims.values()),
+                ' | '.join(name_to_id.get(m, m) for m in dims.values()),
+                r.get('Label(KO)', ''),
+                r.get('Label(EN)', ''),
+                r.get('Name', ''),
+                f"{r['Prefix']}_{r['Name']}" if r.get('Prefix') else r['Name'],
+                r.get('Arcrole', ''),
+                r.get('연결/별도', ''),
+            )
+            key = (sort_key, meta)
+            year = ctx['end'][:4]
+            grouped.setdefault(key, {})[year] = (f, ctx)
+
+    wide_rows = []
+    for (sort_key, meta), year_map in sorted(grouped.items(), key=lambda x: x[0][0]):
+        cy = year_map.get(cy_year)
+        py = year_map.get(py_year)
+        by = year_map.get(by_year)
+        if not (cy or py or by):
+            continue
+
+        ref = cy or py or by
+        row = dict(zip(_META_COLS, meta))
+        row['contextRef'] = _strip_ctx_prefix(ref[0]['contextRef'])
+        row['UnitRef']    = ref[0].get('unitRef', '')
+        row['Decimal']    = ref[0].get('decimals', '')
+        row['CY_fact']    = cy[0]['value'] if cy else ''
+        row['PY_fact']    = py[0]['value'] if py else ''
+        row['BY_fact']    = by[0]['value'] if by else ''
+        wide_rows.append(row)
+
+    return wide_rows
+
+
+# ── 실행 ──────────────────────────────────────────────────────────────────────
+
+if __name__ == '__main__':
+    import sys
+    import pandas as pd
+
+    if len(sys.argv) < 2:
+        print('Usage: python xbrl_linkcheck_v0710.py <zip_path> [output.xlsx]')
+        sys.exit(1)
+
+    zip_path = sys.argv[1]
+    out_path = sys.argv[2] if len(sys.argv) > 2 else \
+        str(Path(__file__).parent / f'linkcheck_{Path(zip_path).stem[:20]}.xlsx')
+
+    with open(zip_path, 'rb') as fp:
+        wide_rows = parse_xbrl_zip_wide(fp.read())
+
+    pd.DataFrame(wide_rows).to_excel(out_path, sheet_name='result', index=False)
+    print(f'저장 완료: {out_path}  ({len(wide_rows)}행)')
