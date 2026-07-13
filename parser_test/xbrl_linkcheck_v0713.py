@@ -1291,6 +1291,7 @@ def parse_xbrl_zip_wide(file_bytes: bytes) -> list[dict]:
 
     table_order:  dict = {}
     member_order: dict = {}
+    axis_order:   dict = {}  # (tkey, axis_name) → presentation 등장 순서 (다중 축 정렬용)
     label_ko:     dict = {}
     label_en:     dict = {}
     name_to_id:   dict = {}
@@ -1304,6 +1305,8 @@ def parse_xbrl_zip_wide(file_bytes: bytes) -> list[dict]:
         )
         tkey = (r.get('Sheet', ''), r.get('xbrl_table_name', ''))
         table_order.setdefault(tkey, i)
+        if r.get('Element') == 'Axis':
+            axis_order.setdefault((*tkey, r['Name']), i)
         if r.get('Element') in ('Domain', 'Member'):
             member_order.setdefault((*tkey, r['Name']), i)
 
@@ -1370,10 +1373,12 @@ def parse_xbrl_zip_wide(file_bytes: bytes) -> list[dict]:
             if not (cy or py or by):
                 continue
 
-            dims    = dict(dims_fs)
-            mem_key = tuple(sorted(
-                member_order.get((*tkey, m), 10**9) for m in dims.values()
-            ))
+            dims     = dict(dims_fs)
+            # presentation 등장 순서(axis_order)로 축 정렬 → 다중 축 순서 결정론적 고정
+            sorted_axes = sorted(dims.keys(), key=lambda ax: axis_order.get((*tkey, ax), 10**9))
+            mem_key = tuple(
+                member_order.get((*tkey, dims[ax]), 10**9) for ax in sorted_axes
+            )
             sort_key = (table_order.get(tkey, 10**9), mem_key, li_idx)
 
             meta = (
@@ -1383,12 +1388,12 @@ def parse_xbrl_zip_wide(file_bytes: bytes) -> list[dict]:
                 r.get('table_name_ko', ''),
                 label_en.get(tname, '') or r.get('role_name_en', ''),
                 name_to_id.get(tname, tname),
-                ' | '.join(label_ko.get(ax, ax) for ax in dims),
-                ' | '.join(label_en.get(ax, ax) for ax in dims),
-                ' | '.join(name_to_id.get(ax, ax) for ax in dims),
-                ' | '.join(label_ko.get(m, m) for m in dims.values()),
-                ' | '.join(label_en.get(m, m) for m in dims.values()),
-                ' | '.join(name_to_id.get(m, m) for m in dims.values()),
+                ' | '.join(label_ko.get(ax, ax) for ax in sorted_axes),
+                ' | '.join(label_en.get(ax, ax) for ax in sorted_axes),
+                ' | '.join(name_to_id.get(ax, ax) for ax in sorted_axes),
+                ' | '.join(label_ko.get(dims[ax], dims[ax]) for ax in sorted_axes),
+                ' | '.join(label_en.get(dims[ax], dims[ax]) for ax in sorted_axes),
+                ' | '.join(name_to_id.get(dims[ax], dims[ax]) for ax in sorted_axes),
                 r.get('Label(KO)', ''),
                 r.get('Label(EN)', ''),
                 name,
